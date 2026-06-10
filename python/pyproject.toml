@@ -4,10 +4,13 @@ version = "0.1.0"
 description = "Batch ingest sidecar for dipho: media in, alignment/diarization/features JSON out"
 requires-python = ">=3.12"
 dependencies = [
-    # Planned (heavy — install when ingest lands, see docs/research/):
-    #   whisperx        — transcription + forced alignment (word/phoneme timestamps)
-    #   pyannote.audio  — speaker diarization
-    #   librosa or pyworld — f0 / RMS prosody features
+    # Planned (heavy — install when ingest lands, see docs/research/04 + SUMMARY):
+    #   mlx-whisper     — transcription (Metal)
+    #   whisperx        — word-level forced alignment (word timestamps ONLY)
+    #   pyannote.audio  — speaker diarization (4.x, MPS, HF-gated)
+    #   librosa         — f0 / RMS prosody features
+    # MFA (phone alignment) is NOT a Python dep: CLI subprocess in its own
+    # micromamba env. Fallback phone aligner: phonemizer + torchaudio.
 ]
 
 [project.scripts]

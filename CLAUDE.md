@@ -28,7 +28,7 @@ Three processes, each doing what it's best at:
 
 - **Rust core** (this workspace): corpus index, search, EDL, DSP, ratatui TUI, mpv control via JSON IPC
 - **mpv**: external window slave player for preview/audition (`--input-ipc-server`). Never render video in-terminal.
-- **Python sidecar** (`python/`): batch ingest only (WhisperX, pyannote). Contract: media in → alignment/diarization/features JSON out.
+- **Python sidecar** (`python/`): batch ingest only (mlx-whisper transcribe → WhisperX word align → MFA phone align → pyannote diarization → librosa prosody). Contract: media in → alignment/diarization/features JSON out.
 
 ```
 crates/
@@ -73,7 +73,7 @@ One-line imperative summaries, sentence case, no type prefixes: "Add diphone ind
 - arm64; Homebrew at `/opt/homebrew`
 - Rust toolchain via rustup (`~/.cargo/bin`), pinned stable in `rust-toolchain.toml`
 - mpv, ffmpeg, yt-dlp via brew
-- Whisper inference will run locally on this machine — backend choice (faster-whisper CPU int8 vs whisper.cpp/MLX Metal) is recorded in docs/research/
+- Whisper inference runs locally via mlx-whisper (Metal) — faster-whisper/CTranslate2 has no Metal backend; pyannote 4.x runs on MPS (see docs/research/04-alignment-stack.md)
 - Python sidecar uses `uv` exclusively (no pip, no poetry)
 
 ## MVP Scope

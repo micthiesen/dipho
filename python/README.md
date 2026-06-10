@@ -7,7 +7,7 @@ uv sync
 uv run dipho-ingest <media-file> > analysis.json
 ```
 
-Planned heavy dependencies (not installed yet): WhisperX (transcription + forced alignment), pyannote.audio (diarization), librosa/pyworld (prosody). See `docs/research/` for the ratified stack.
+Planned heavy dependencies (not installed yet): mlx-whisper (transcription, Metal), WhisperX (word alignment), Montreal Forced Aligner (phone alignment — CLI subprocess in its own micromamba env, not a Python dep), pyannote.audio 4.x (diarization, HF-gated), librosa (prosody). See `docs/research/04-alignment-stack.md` and `docs/research/SUMMARY.md`.
 
 ## JSON output contract
 

@@ -20,15 +20,25 @@ Audio and video are decoupled as first-class: a mix routinely takes the audio of
 
 ### Ingest pipeline
 
+> Revised after the 2026-06 research pass (docs/research/SUMMARY.md): WhisperX's English alignment models are letter-CTC — it emits word/character timestamps only, **never phonemes**. The phone tier needs its own alignment stage.
+
 ```
 yt-dlp URL or local file
   → ffmpeg demux (normalized audio extraction: wav, mono, 16 kHz for analysis;
                   original media kept untouched for playback/render)
-  → WhisperX: transcription + forced alignment → word AND phoneme timestamps
-  → pyannote: speaker diarization → speaker label per span
-  → prosody features per unit: f0 (pitch), RMS energy
+  → mlx-whisper (large-v3-turbo, Metal): transcription
+  → WhisperX align(): word-level timestamps
+  → MFA 3.x (CLI subprocess, own micromamba env, per-segment chunks):
+      phone tier → diphones derived at phone midpoints
+  → pyannote 4.x community-1 (MPS, run directly, HF token required):
+      speaker diarization
+  → librosa: prosody features per frame (f0, RMS energy)
   → write to corpus SQLite
 ```
+
+Fallback phoneme aligner (pure pip, softer boundaries — acceptable because post-MVP DSP cut refinement re-snaps cuts): phonemizer/espeak-ng → `facebook/wav2vec2-lv-60-espeak-cv-ft` → `torchaudio.functional.forced_align`. The phones schema is aligner-agnostic (`aligner_id` + per-phone confidence) so both backends coexist.
+
+Environment strategy — learned from why sentence-mixing died (pinned MFA 1.1.0-beta binary, yt-dlp 2022): fragile tools live behind subprocess boundaries (MFA is CLI-only, in its own micromamba env; WhisperX's heavily-pinned deps isolated from everything else), and yt-dlp stays unpinned.
 
 Ingest is batch, offline, Python (`python/` sidecar). It is never in the interactive loop. Contract: media in → one JSON document out (alignment, diarization, features), which the Rust side ingests into SQLite. The JSON contract is documented in `python/README.md`.
 
@@ -49,6 +59,8 @@ One SQLite database per corpus (rusqlite, bundled — no system dependency):
 - `prosody` — per-unit f0 mean/contour summary, RMS energy (columns on the unit tables or a sidecar table; needed by the join-cost solver later, so it ships in the schema now)
 - `speakers` — diarization clusters, optional human-assigned names
 
+Phone rows carry `aligner_id` and a confidence column so MFA and the CTC fallback aligner can coexist in one corpus.
+
 Schema rule: **post-MVP features (solver, join cost) must be servable from this schema without rework.** Prosody and diphone tables exist from day one even though MVP only reads `words`.
 
 ## Abstraction 2: The Edit
@@ -61,10 +73,24 @@ loop, reverse, pitch, speed, stutter, ...
 
 Serde-friendly format of our own (JSON or TOML — decided by what stays pleasant to hand-edit and diff). It compiles to two targets:
 
-1. **mpv EDL** — for instant, zero-render preview. mpv plays EDL playlists natively, so auditioning an edit is just telling the already-running mpv to load a compiled EDL string. Transforms that mpv can't express in EDL (pitch, reverse) degrade gracefully in preview or use mpv property/filter commands where possible.
-2. **ffmpeg render** — final export. Full-fidelity compilation of every transform to an ffmpeg filter graph / concat.
+1. **mpv EDL** — for instant, zero-render preview. The edit recompiles to an `edl://` URI on every change and is sent to the long-lived mpv slave via `["loadfile", uri, "replace"]` — no temp files. A `.mpv.edl` file export is a user-facing artifact of the same compiler. Transforms that mpv can't express in EDL (pitch, reverse) degrade gracefully in preview or use mpv property/filter commands where possible.
+2. **ffmpeg render** — final export. Full-fidelity compilation of every transform to an ffmpeg filter graph / concat. Never moviepy (videogrep's batch-of-20 + gc workarounds are a cautionary tale).
 
 The asymmetry is deliberate: preview optimizes for latency (milliseconds, no temp files), render optimizes for correctness.
+
+### EDL compiler contract
+
+One choke-point Rust module (`dipho-core::edl`), both targets, golden-file tests:
+
+- **Quoting**: every path/value quoted unconditionally with the spec's `%<byte-count>%` form (UTF-8 byte count) — naive emitters break on commas in filenames
+- **Named params** (`start=`, `length=`), floats formatted explicitly (`{:.6}`), per-segment `title=` (word label; mpv's implicit chapter-per-segment gives free cut navigation)
+- **Pad-then-merge semantics** (lifted from videogrep, applied before *both* targets): symmetric padding → clamp at 0 → merge overlapping/touching spans per source → clamp end to source duration
+- `!new_stream` is the post-MVP mechanism for audio-from-A-over-video-from-B; `!delay_open`/`!no_clip`/`!mp4_dash` and `memory://` are out of scope
+- mpv EDL v0 is explicitly unfrozen → probe mpv version at startup (also gates the `loadfile` 4th arg, added in mpv 0.38)
+
+### mpv slave lifecycle
+
+Spawn once: `mpv --idle=yes --keep-open=yes --no-terminal --input-ipc-server=$TMPDIR/dipho-mpv.sock` (short path — macOS `sun_path` ~104-byte limit; socket 0600 since IPC exposes `run`). One persistent JSON IPC connection for the whole session (closing drops `observe_property` registrations). Correlate replies by `request_id`, never message order; treat `playback-restart` as seek-done. Unit audition = exact seek + `ab-loop-a`/`ab-loop-b` properties (clear with `"no"`).
 
 ## The Solver (post-MVP)
 
@@ -74,6 +100,16 @@ Type a target sentence → ranked candidate assemblies. Classical unit-selection
 - **Join cost** — objective splice quality at each boundary: spectral discontinuity, f0 jump, energy jump. Explicitly **not** humor scoring; the human picks the funny one from a shortlist of clean ones.
 
 Viterbi/beam search over the diphone lattice, same as the literature. The corpus schema (diphones + prosody) exists to feed this.
+
+Seeds from prior art (sentence-mixing — port the ideas, not the code; see docs/research/01):
+
+- Their 3-step cost decomposition maps 1:1 onto target cost (steps 1–2) + join cost (step 3); their weight ratios (amplitude-join ≫ spectral-join, contiguity bonus per phoneme, duration caps per phoneme class) are tuning starting points
+- **Contiguity principle**: source-adjacent diphones get zero join cost plus a contiguous-span bonus — long natural runs beat technically-clean Frankenstein joins
+- Candidate generation uses a phoneme substitution matrix (no hard out-of-vocabulary failures — their exact-match-only lookup hard-failed)
+- Beam search over a per-position candidate lattice; join cost depends only on a short suffix (last vowel + recent RMS), which keeps the state space small
+- Punctuation becomes `<BLANK>` pause targets scored by silence-RMS + duration; seeded noise diversifies alternative rankings
+- videogrep-style random `mash` is the baseline the solver must demonstrably beat
+- UX to keep from their CLI: chunk-by-chunk (~1 word) authoring, rank-ordered candidates, a stash buffer, re-edit, accept-and-advance, autosaved sessions — improved with a visible scored candidate list and instant mpv-EDL audition
 
 ## DSP cut refinement (post-MVP, native)
 
@@ -96,6 +132,14 @@ Workspace layout:
 - `crates/dipho` — binary: clap CLI, ratatui TUI, mpv IPC client.
 - `python/` — uv project, `dipho-ingest` entry point.
 
+### TUI architecture
+
+Elm-flavored single event loop on tokio (the convergent pattern across television, atuin, gitui, yazi — skip component frameworks): one `App` state struct, one merged `Event` enum (`Term`, `Tick`, `Mpv`, `Db`, `Job`), all producers feeding one mpsc channel, a single consumer loop, render-on-dirty with ~10 ms debounce. Module layout in `crates/dipho`: `app.rs` (state + update), `event.rs`, `ui/` (pure draw), `mpv/` (spawn + client task), `db/` (rusqlite on `spawn_blocking`).
+
+The mpv IPC client is hand-rolled (~200 lines: `UnixStream` + request_id→oneshot map + events→mpsc) — existing crates are low-bus-factor and dipho needs precise control. Crates: now — ratatui, tokio, crossterm (event-stream), tui-input, serde_json, rusqlite; later — nucleo (fuzzy), ratatui-textarea, rodio (only if mpv audition latency disappoints); skip — mpvipc, kira.
+
+Waveform display is built in-tree: Canvas + braille min/max envelope (Sparkline as stopgap) — no maintained terminal waveform widget exists. The per-zoom min/max/RMS peaks cache is the same data post-MVP DSP cut refinement needs, so they share it.
+
 ## MVP: one vertical slice
 
 In order, each step usable before the next exists:
@@ -107,11 +151,26 @@ In order, each step usable before the next exists:
 5. **Flat EDL** — append spans to an edit list, reorder, save/load the EDL file, preview via compiled mpv EDL
 6. **Render** — `dipho render edit.json out.mp4` via ffmpeg
 
-Post-MVP, in rough order: transforms beyond cut/concat, diphone assembly search, the solver, DSP cut refinement, learned splice scoring.
+Post-MVP, in rough order: transforms beyond cut/concat, diphone assembly search, the solver, DSP cut refinement, learned splice scoring. Cheap export targets once the EDL compiler exists: output-timeline VTT, FCP7 XML ("finish in a real NLE"), m3u.
+
+## Risk register
+
+- **mpv EDL v0 is unfrozen** — mitigated by the version probe, single serializer module, golden tests
+- **MFA is conda-only in practice** (Kaldi/pynini binaries; hence the micromamba env) and arm64-on-M4 is not yet smoke-tested — early spike required; the CTC fallback aligner is the escape hatch. An MFA version pin is exactly what killed sentence-mixing; the subprocess boundary is the mitigation.
+- **mpv audition latency on sub-second units is unmeasured** — measure before adopting any audio crate; rodio + pre-decoded PCM is the fallback
+- **pyannote community-1 is HF-gated** — ingest needs an HF token + one-time license acceptance (setup prerequisite)
+- **Dependency rot killed the prior art** — counter-policy: yt-dlp unpinned, fragile tools behind subprocess boundaries, aligner-agnostic schema
+- mlx-whisper has a reported memory-growth issue with `word_timestamps` on long audio — don't enable it; word times come from WhisperX align
 
 ## Open questions
 
+Resolved by the 2026-06 research pass: WhisperX is word-level only (MFA/CTC supplies phones); Whisper backend on Apple Silicon is mlx-whisper (faster-whisper has no Metal backend).
+
+Owner-level calls still open (see docs/research/SUMMARY.md):
+
+- Conda tolerance: micromamba-wrapped MFA in MVP ingest, or start on the pure-pip CTC fallback and adopt MFA later?
+- mpv version floor: pin/bundle a known version or support a range via the startup probe?
+- Phone set: MFA `english_mfa` vs ARPAbet `english_us_arpa` (CMUdict-compatible) — decides the canonical labels in the phones/diphones tables
+- HF token as a hard ingest prerequisite, or make diarization optional?
+- Latency budget for audition: what's "good enough" via mpv before investing in a rodio PCM path?
 - EDL file format: JSON vs TOML (lean JSON for nested structure; revisit when the EDL type stabilizes)
-- WhisperX phoneme-level output quality vs adding MFA as a second alignment pass (research pass will answer)
-- Whisper backend on Apple Silicon: faster-whisper (CTranslate2, CPU int8) vs whisper.cpp / MLX (Metal) (research)
-- Diphone label set: ARPAbet (what most aligners emit) vs IPA
