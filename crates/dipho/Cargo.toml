@@ -6,12 +6,15 @@ edition.workspace = true
 [dependencies]
 anyhow = "1.0.102"
 clap = { version = "4.6.1", features = ["derive"] }
-crossterm = "0.29.0"
+crossterm = { version = "0.29.0", features = ["event-stream"] }
 dipho-core = { path = "../dipho-core" }
+futures-util = { version = "0.3.32", default-features = false, features = ["std"] }
 ratatui = "0.30.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.11.0"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "sync"] }
+tui-input = "0.15.3"
 
 [dev-dependencies]
 tempfile = "3.27.0"

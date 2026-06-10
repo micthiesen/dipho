@@ -1,5 +1,6 @@
 mod ingest;
 mod mpv;
+mod search;
 mod tui;
 
 use anyhow::bail;
@@ -12,6 +13,10 @@ use clap::{Parser, Subcommand};
     about = "A TUI for making YTPs and sentence mixes"
 )]
 struct Cli {
+    /// Corpus database
+    #[arg(long, global = true, default_value = ".dipho/corpus.db")]
+    corpus: std::path::PathBuf,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -21,9 +26,6 @@ enum Command {
     /// Ingest a source (URL or local file) into the corpus
     Ingest {
         input: String,
-        /// Corpus database (default: ./.dipho/corpus.db)
-        #[arg(long)]
-        corpus: Option<std::path::PathBuf>,
         /// Re-ingest even if this origin_id is already in the corpus
         #[arg(long)]
         force: bool,
@@ -40,19 +42,15 @@ enum Command {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        None => tui::run(),
-        Some(Command::Ingest {
-            input,
-            corpus,
-            force,
-        }) => ingest::run(
+        None => tui::run(cli.corpus),
+        Some(Command::Ingest { input, force }) => ingest::run(
             &input,
             &ingest::Options {
-                corpus_db: corpus.unwrap_or_else(|| ".dipho/corpus.db".into()),
+                corpus_db: cli.corpus,
                 force,
             },
         ),
-        Some(Command::Search { .. }) => bail!("not implemented yet (milestone: word search)"),
+        Some(Command::Search { query }) => search::run(&query, &cli.corpus),
         Some(Command::Render { .. }) => bail!("not implemented yet (milestone: render)"),
     }
 }

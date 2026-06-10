@@ -10,20 +10,24 @@ mod diphones;
 mod features;
 mod loader;
 pub mod manifest;
+mod normalize;
 mod npz;
 mod phones;
 mod schema;
+mod search;
 mod speakers;
 
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 pub use features::ProsodyData;
 pub use loader::{LoadReport, SourceMeta};
 pub use manifest::Manifest;
+pub use normalize::normalize_query;
 pub use npz::prosody_from_npz;
 pub use schema::SCHEMA_VERSION;
+pub use search::{SearchHit, WordSpan};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CorpusError {
@@ -35,6 +39,10 @@ pub enum CorpusError {
     UnknownManifestVersion(u32),
     #[error("corpus schema version {found} is newer than this build supports ({supported})")]
     SchemaTooNew { found: i64, supported: i64 },
+    #[error(
+        "corpus schema version {found} is behind this build ({supported}) — run `dipho ingest` to migrate"
+    )]
+    SchemaStale { found: i64, supported: i64 },
     #[error("unknown phone label {label:?}")]
     UnknownPhoneLabel { label: String },
     #[error("prosody frames disagree with the manifest: {0}")]
@@ -68,6 +76,16 @@ impl Corpus {
         Self::init(Connection::open_in_memory()?)
     }
 
+    /// Read-only handle for search and other queries — fails (rather than
+    /// creating an empty database) when the corpus doesn't exist, and can
+    /// never contend for the write lock.
+    pub fn open_read_only(path: &Path) -> Result<Self, CorpusError> {
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        Self::init(Connection::open_with_flags(path, flags)?)
+    }
+
     fn init(conn: Connection) -> Result<Self, CorpusError> {
         // Per-connection pragmas only; WAL is persistent and set by
         // migration v1, so read-only connections never need to write it.
@@ -88,6 +106,30 @@ impl Corpus {
     /// written by a newer schema than this build knows.
     pub fn migrate(&mut self) -> Result<(), CorpusError> {
         schema::migrate(&mut self.conn)
+    }
+
+    /// Typed check that this corpus is at exactly the supported schema
+    /// version — for read-only consumers, which cannot migrate.
+    pub fn ensure_schema_current(&self) -> Result<(), CorpusError> {
+        let found = self.schema_version()?;
+        match found {
+            v if v > SCHEMA_VERSION => Err(CorpusError::SchemaTooNew {
+                found,
+                supported: SCHEMA_VERSION,
+            }),
+            v if v < SCHEMA_VERSION => Err(CorpusError::SchemaStale {
+                found,
+                supported: SCHEMA_VERSION,
+            }),
+            _ => Ok(()),
+        }
+    }
+
+    /// Word or phrase search over the utterance FTS5 index. The query is
+    /// normalized exactly like the index ("25" finds "twenty five"); hits
+    /// map back to exact word spans.
+    pub fn search(&self, query: &str) -> Result<Vec<SearchHit>, CorpusError> {
+        search::search(&self.conn, query)
     }
 
     /// Source id for an origin_id, if it was ingested before. The

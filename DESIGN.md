@@ -236,4 +236,10 @@ Deferred from M2 (recorded 2026-06-10):
 
 - `phones.confidence` is a placeholder heuristic, not an acoustic score: 1.0, reduced to 0.5 within 100 ms of a chunk edge. Replace with real per-phone alignment scores (MFA exposes them via alignment analysis) when the solver's target cost starts consuming confidence — before tuning, not after
 - The mpv `time-pos` leg of the timebase integration tests needs the IPC client → M4. The wav-position legs (500 ms container offset, 300 ms mid-stream gap) pass as `#[ignore]` tests in `crates/dipho/src/ingest/normalize.rs`
-- The yt-dlp URL download path is implemented but unexercised (M2 e2e used a local file) — verify when building the first real corpus (M3); the compilers' typed audio-only rejection depends on it
+- ~~The yt-dlp URL download path is implemented but unexercised~~ — verified in M3 (real YouTube ingest end to end, origin_id idempotency re-checked)
+
+Deferred from M3 (recorded 2026-06-10):
+
+- Query normalization is a token-level Rust port of the sidecar's num2words English expansion (`corpus/normalize.rs`), parity-pinned by tests. Accepted divergences, both unreachable for English ASR tokens: numbers beyond u128 fall back to digit-by-digit earlier than Python, and non-ASCII unicode digits are stripped rather than expanded. If the sidecar's normalization ever changes, the Rust port and its pinned cases must change with it
+- Words containing apostrophes must be queried with the same spelling ("don't" finds "don't"; "don t" does not) — FTS5's unicode61 tokenizer splits on apostrophes, so such utterances FTS-match more loosely, but only word-row-exact phrase occurrences are returned as hits
+- Search results are corpus-ordered (source_id, t_start); relevance ranking is a solver-era concern

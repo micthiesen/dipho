@@ -24,6 +24,8 @@ Starts with the **MFA arm64 smoke-test spike** (risk register) so failure surfac
 
 **Verify:** word and phrase queries return every utterance with exact word spans; query text goes through the same normalization as the index (digits expanded, punctuation stripped — "25" must find "twenty five"). Build the test corpus from a real YouTube URL — this exercises the yt-dlp download path, untested in M2.
 
+**Done 2026-06-10.** `dipho search` CLI + the TUI search loop (tokio mpsc, tui-input, results table with speaker/confidence and in-utterance highlight). Query normalization is a token-level Rust port of the sidecar's num2words expansion, parity-pinned in tests and swept against the Python side over ~22k cases during development. Verified on a real corpus ingested from a YouTube URL — which also closes the M2 deferral on the yt-dlp download path (origin_id idempotency re-checked): word, phrase, overlapping-occurrence, and no-hit queries all map to exact word spans; TUI smoke-tested in a pty.
+
 ## M4 — Audition via mpv
 
 Hand-rolled IPC client (UnixStream, request_id correlation, event task), slave lifecycle (spawn flags, version probe ≥ 0.38, 0600 socket), `PlayerMode::Audition`. Three playback keys per hit: loop-exact (ab-loop), play-with-context (±500 ms), play-full-utterance.
