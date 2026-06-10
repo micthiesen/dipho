@@ -32,6 +32,8 @@ Diarization is HF-gated and **not optional**: accept the license for `pyannote/s
   original.bin       # raw download / copied local file (Rust stage)
   master.mkv         # playback master (Rust stage)
   audio.wav          # analysis wav (Rust stage)
+  normalize.json     # Rust normalize-stage record: master_hash (computed once), fps, has_video, start_offsets
+  ingest.log         # sidecar stderr from the most recent run (Rust truncates per run)
   transcript.json    # mlx-whisper segments
   words.json         # WhisperX-aligned words + segment tier + normalized-token map
   phones.json        # MFA phone tier, rebased to master time

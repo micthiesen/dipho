@@ -68,7 +68,7 @@ yt-dlp URL or local file                     (staged: original.bin)
 
 **Staged, resumable work dir** — keyed by **origin_id**, created by the Rust caller. Stages: `original.bin` → `master.mkv` + `audio.wav` → `transcript.json` → `words.json` → `phones.json` → `diarization.json` → `prosody.npz` → `manifest.json`. Integrity protocol: every stage writes `<name>.tmp`, fsyncs the file, renames, fsyncs the directory; each JSON stage embeds `{stage_schema_version, input_fingerprint}` where the fingerprint is SHA-256 over the upstream stage files it consumed — "validates" means parses + version known + fingerprint chain matches; a mismatch invalidates that stage and everything downstream. `manifest.json` is written last and is the commit record: a workdir without one is incomplete by definition. All manifest paths are workdir-relative; the workdir is self-contained. Sidecar stdout is NDJSON progress (`{"stage": "diarize", "pct": 40}`, terminal `{"done"}` / `{"error": {stage, message}}`) feeding `Event::Job`. Full contract in `python/README.md`.
 
-**Environment strategy** — learned from why sentence-mixing died (pinned MFA 1.1.0-beta, yt-dlp 2022): fragile tools behind subprocess boundaries (MFA is CLI-only in its own micromamba env; WhisperX's pinned deps isolated), yt-dlp unpinned, pyannote's HF token + license acceptance a documented hard prerequisite (diarization is not optional).
+**Environment strategy** — learned from why sentence-mixing died (pinned MFA 1.1.0-beta, yt-dlp 2022): fragile tools behind subprocess boundaries (MFA is CLI-only in its own micromamba env), yt-dlp unpinned, pyannote's HF token + license acceptance a documented hard prerequisite (diarization is not optional). The WhisperX/pyannote env split the research pass anticipated is moot: whisperx ≥ 3.8 depends on pyannote 4.x directly, so one uv env holds the whole sidecar. pyannote 4.x gotchas (verified 2026-06-10): the diarize stage feeds a soundfile-decoded waveform dict — pyannote's built-in torchcodec decode links FFmpeg 4–7 dylibs only and fails against brew's FFmpeg 8 — and reads turns from `DiarizeOutput.speaker_diarization` (4.x returns a dataclass, not an Annotation).
 
 ### Why diphones, not phonemes
 
@@ -228,6 +228,12 @@ Still open:
 
 Deferred from the M1 review (do when their milestone lands, not before):
 
-- Loader hot-loop costs (terminator insertion and per-unit speaker assignment are O(units × turns/boundaries); frame/feature blobs are encoded with a per-element copy) — fine at fixture scale and dwarfed by the ML stages; optimize only with M2 ingest profiles in hand
-- `ingest_runs.started/finished/status` are stamped at load time by the loader; the M2 `dipho ingest` command owns real lifecycle provenance (stage timing, failure states)
-- EDL `SourceInfo.fps` is non-optional while `sources.fps` is NULL for audio-only sources — reconcile when the binary wires corpus → SourceMap (M5); the compilers' typed audio-only rejection depends on it
+- Loader hot-loop costs (terminator insertion and per-unit speaker assignment are O(units × turns/boundaries); frame/feature blobs are encoded with a per-element copy) — fine at fixture scale and dwarfed by the ML stages; optimize only with profiles from a real long-source ingest in hand (M2 only ingested short fixtures)
+- `ingest_runs.started/finished/status` are stamped at load time by the loader. M2 shipped `dipho ingest` without per-stage lifecycle provenance — re-deferred: do it when the TUI ingest job UX lands (`Event::Job` already carries per-stage progress) or alongside `dipho reingest --stale`, whichever comes first
+- EDL `SourceInfo.fps` is non-optional while `sources.fps` is NULL for audio-only sources — reconcile when the binary wires corpus → SourceMap (M5)
+
+Deferred from M2 (recorded 2026-06-10):
+
+- `phones.confidence` is a placeholder heuristic, not an acoustic score: 1.0, reduced to 0.5 within 100 ms of a chunk edge. Replace with real per-phone alignment scores (MFA exposes them via alignment analysis) when the solver's target cost starts consuming confidence — before tuning, not after
+- The mpv `time-pos` leg of the timebase integration tests needs the IPC client → M4. The wav-position legs (500 ms container offset, 300 ms mid-stream gap) pass as `#[ignore]` tests in `crates/dipho/src/ingest/normalize.rs`
+- The yt-dlp URL download path is implemented but unexercised (M2 e2e used a local file) — verify when building the first real corpus (M3); the compilers' typed audio-only rejection depends on it

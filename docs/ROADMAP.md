@@ -16,17 +16,19 @@ Starts with the **MFA arm64 smoke-test spike** (risk register) so failure surfac
 
 **Verify:** ingest a short real video end to end; spot-check word timestamps against audio (excluding reduced-confidence chunk-edge phones); **timebase integration tests** — (a) synthetic video with a beep at a known time and a deliberate 500 ms container offset, (b) synthetic video with a 300 ms mid-stream audio timestamp gap: in both, wav-time == mpv `time-pos` == rendered beep position within one video frame; kill the sidecar mid-stage and confirm the re-run skips completed stages.
 
+**Done 2026-06-10.** MFA arm64 spike passed (micromamba + conda-forge 3.3.9); full pipeline verified including real pyannote diarization; timebase tests pass on the wav leg (`cargo test -p dipho -- --ignored`); stage-corruption resume verified. Deferred (recorded in DESIGN.md): mpv `time-pos` leg → M4, real-URL ingest → M3, phone confidence is a chunk-edge heuristic until the solver needs real scores.
+
 ## M3 — Word search (CLI first, then TUI)
 
 `dipho search <query>` over utterance FTS5, then the TUI shell grows the Elm-style event loop (tokio, single mpsc) with a search input (tui-input) and a results list showing each hit highlighted inside its utterance, with speaker and confidence columns.
 
-**Verify:** word and phrase queries return every utterance with exact word spans.
+**Verify:** word and phrase queries return every utterance with exact word spans; query text goes through the same normalization as the index (digits expanded, punctuation stripped — "25" must find "twenty five"). Build the test corpus from a real YouTube URL — this exercises the yt-dlp download path, untested in M2.
 
 ## M4 — Audition via mpv
 
 Hand-rolled IPC client (UnixStream, request_id correlation, event task), slave lifecycle (spawn flags, version probe ≥ 0.38, 0600 socket), `PlayerMode::Audition`. Three playback keys per hit: loop-exact (ab-loop), play-with-context (±500 ms), play-full-utterance.
 
-**Verify:** arrow through hits and hear each within the latency budget — **measure the seek round-trip here**; this answers the open rodio question.
+**Verify:** arrow through hits and hear each within the latency budget — **measure the seek round-trip here**; this answers the open rodio question. Close the M2 timebase deferral: load the beep fixtures (`crates/dipho/src/ingest/normalize.rs` tests) into mpv and assert wav-time == `time-pos` at the beep.
 
 ## M5 — Flat EDL + preview
 
