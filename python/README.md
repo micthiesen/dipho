@@ -66,6 +66,9 @@ Versioned with `schema_version`; the loader rejects unknown versions.
   "turns": [                       // the ONLY speaker data the sidecar emits
     { "speaker": "SPEAKER_00", "start": 0.0, "end": 14.2 }
   ],
+  "chunks": [                      // MFA chunk spans, master-relative — the loader
+    { "start": 0.0, "end": 30.0 }  // inserts SIL adjacency terminators at their edges
+  ],
   "prosody": {
     "path": "prosody.npz",         // f0 (Hz, 0 = unvoiced), rms_db, mfcc[n,13]
     "hop": 0.01,                   // frame i centered at t = i*hop (librosa center=True)
@@ -78,5 +81,7 @@ Notes:
 
 - Speaker labels on units are **loader-derived** from `turns` (maximal temporal overlap; ties → earlier; zero → null). The sidecar never assigns speakers to words.
 - `word_index` refers to the sidecar's own normalized-token mapping — never a positional zip of two tokenizers.
+- `segments[].text` is the raw WhisperX text (kept for display); the search index document (`utterances.text_norm`) is loader-derived by joining the segment's normalized words, so FTS phrase tokens and word ordinals are the same stream by construction.
 - Diphones, cut points, SIL insertion/merging, adjacency, and all per-unit aggregation (prosody summaries, MFCC/f0/RMS boundary features) are loader logic in Rust — re-deriving units never re-runs Python.
-- MFA chunking (segment merge < 300 ms gaps, 250 ms pads, TextGrid parse + rebase) is internal to the sidecar and invisible in the contract.
+- MFA chunking (segment merge < 300 ms gaps, 250 ms pads, TextGrid parse + rebase) is internal to the sidecar; only the resulting chunk spans appear in the contract — the loader needs their edges to insert chunk-origin SIL terminators (`phones.sil_origin = 'chunk'`). Chunk spans are a pure function of `words.json`'s segment tier, so a resume that skips straight to the manifest stage recomputes them deterministically without re-running MFA.
+- The loader validates before writing (typed errors, reject-never-clamp): every timestamp must be finite and lie within `[0, analysis.duration]` with `end >= start`; phone intervals must not overlap and real phones must have positive extent; the prosody arrays must match `1 + floor(duration/hop)`. The sidecar must clamp emitted times to the analysis duration (MFA TextGrid edges can exceed it by rounding).
