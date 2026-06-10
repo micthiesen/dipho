@@ -59,8 +59,11 @@ pub type SourceMap = HashMap<SourceId, PathBuf>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EdlCompileError {
-    #[error("clip {clip_index}: source {source:?} not in the source map")]
-    UnresolvedSource { clip_index: usize, source: SourceId },
+    #[error("clip {clip_index}: source {source_id:?} not in the source map")]
+    UnresolvedSource {
+        clip_index: usize,
+        source_id: SourceId,
+    },
     #[error("clip {clip_index}: channel {channel:?} is not compilable in MVP (Both only)")]
     ChannelUnsupported { clip_index: usize, channel: Channel },
 }
