@@ -1,0 +1,81 @@
+# dipho
+
+A TUI tool for making YTPs and sentence mixes. Core thesis: sentence mixing is unit-selection speech synthesis where the unit database is arbitrary source media.
+
+> This is a living document. Update it when you learn new preferences, patterns, or project conventions. Don't ask—just update it if something is missing or outdated.
+
+@DESIGN.md
+
+## Quick Reference
+
+```bash
+cargo build                     # Build the workspace
+cargo test                      # Run all tests
+cargo clippy -- -D warnings     # Lint (warnings are errors)
+cargo fmt                       # Format code
+cargo run -p dipho              # Run the CLI/TUI
+
+# Python ingest sidecar (batch only, never in the interactive loop)
+cd python && uv sync            # Install sidecar deps
+cd python && uv run dipho-ingest --help
+```
+
+**Always run `cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test` after making changes.**
+
+## Architecture
+
+Three processes, each doing what it's best at:
+
+- **Rust core** (this workspace): corpus index, search, EDL, DSP, ratatui TUI, mpv control via JSON IPC
+- **mpv**: external window slave player for preview/audition (`--input-ipc-server`). Never render video in-terminal.
+- **Python sidecar** (`python/`): batch ingest only (WhisperX, pyannote). Contract: media in → alignment/diarization/features JSON out.
+
+```
+crates/
+├── dipho-core/          # Library: no TUI, no I/O policy
+│   └── src/
+│       ├── span.rs      # Span references: (source_id, t_start, t_end, channel)
+│       ├── corpus/      # SQLite index (rusqlite bundled): sources, words, diphones
+│       ├── edl/         # EDL-as-data: types + compile to mpv EDL / ffmpeg
+│       └── dsp/         # Cut refinement (zero-crossing snap, spectral flux) — stub
+├── dipho/               # Binary: clap CLI + ratatui TUI shell
+│   └── src/
+│       ├── main.rs      # CLI entry (clap subcommands)
+│       ├── tui/         # ratatui app shell
+│       └── mpv/         # mpv JSON IPC client
+python/                  # uv project: ingest sidecar (WhisperX + pyannote planned)
+docs/                    # DESIGN.md is canonical; research reports in docs/research/
+```
+
+Two core abstractions (see DESIGN.md for the full treatment):
+
+1. **The Corpus** — an addressable phonetic index over immutable sources. Sources are never edited, only indexed. Everything is a span reference; audio and video channels are decoupled. Diphones, not phonemes, are the indexed unit.
+2. **The Edit** — a program, not a timeline. Non-destructive EDL-as-data that compiles to mpv EDL (instant preview) and ffmpeg (final render).
+
+## Code Style
+
+- `cargo fmt` for formatting (default config), `clippy -D warnings` must pass
+- **Strong types**: newtypes over bare primitives, enums and exhaustive matches over flags
+- **No over-engineering**: simple solutions, no unnecessary abstractions; add generality when a second concrete use case demands it, not before
+- **Clean code**: no debug leftovers, no commented-out code, no `println!` debugging in committed code
+- Errors: `thiserror` in `dipho-core`, `anyhow` in the binary
+
+## Testing
+
+Test pure logic (span math, EDL compilation, schema queries against in-memory SQLite); don't test mpv/ffmpeg/network. Unit tests live next to the code in `#[cfg(test)]` modules.
+
+## Commits
+
+One-line imperative summaries, sentence case, no type prefixes: "Add diphone index table", not "feat: added diphone index table".
+
+## Platform Notes (Apple Silicon, M4 Max)
+
+- arm64; Homebrew at `/opt/homebrew`
+- Rust toolchain via rustup (`~/.cargo/bin`), pinned stable in `rust-toolchain.toml`
+- mpv, ffmpeg, yt-dlp via brew
+- Whisper inference will run locally on this machine — backend choice (faster-whisper CPU int8 vs whisper.cpp/MLX Metal) is recorded in docs/research/
+- Python sidecar uses `uv` exclusively (no pip, no poetry)
+
+## MVP Scope
+
+Vertical slice, in order: ingest → index → word search → audition via mpv → flat EDL → ffmpeg render. The solver, join-cost ranking, and learned splice scoring are post-MVP — but the schema must support them without rework.
