@@ -10,6 +10,7 @@ mod diphones;
 mod features;
 mod loader;
 pub mod manifest;
+mod npz;
 mod phones;
 mod schema;
 mod speakers;
@@ -21,6 +22,7 @@ use rusqlite::Connection;
 pub use features::ProsodyData;
 pub use loader::{LoadReport, SourceMeta};
 pub use manifest::Manifest;
+pub use npz::prosody_from_npz;
 pub use schema::SCHEMA_VERSION;
 
 #[derive(Debug, thiserror::Error)]
@@ -37,6 +39,8 @@ pub enum CorpusError {
     UnknownPhoneLabel { label: String },
     #[error("prosody frames disagree with the manifest: {0}")]
     FrameMismatch(String),
+    #[error("malformed prosody npz: {0}")]
+    Npz(String),
     #[error("{what} index {index} is out of range")]
     IndexOutOfRange { what: &'static str, index: usize },
     #[error("{what} has invalid interval [{t_start}, {t_end}]")]
@@ -84,6 +88,21 @@ impl Corpus {
     /// written by a newer schema than this build knows.
     pub fn migrate(&mut self) -> Result<(), CorpusError> {
         schema::migrate(&mut self.conn)
+    }
+
+    /// Source id for an origin_id, if it was ingested before. The
+    /// pre-download idempotency check: ingest of a known origin_id is a
+    /// no-op without `--force`.
+    pub fn find_source(&self, origin_id: &str) -> Result<Option<i64>, CorpusError> {
+        use rusqlite::OptionalExtension;
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM sources WHERE origin_id = ?1",
+                [origin_id],
+                |row| row.get(0),
+            )
+            .optional()?)
     }
 
     /// Load one source's sidecar output into the corpus and derive all

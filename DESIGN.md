@@ -208,7 +208,7 @@ Post-MVP, rough order: transforms → waveform widget → diphone assembly searc
 ## Risk register
 
 - **mpv EDL v0 unfrozen** — version probe, single serializer, golden tests
-- **MFA conda-only, arm64-on-M4 unverified** — first task of M2; subprocess boundary keeps it swappable. Sole aligner: if truly unworkable, reassess openly, never silently degrade.
+- **MFA conda-only** — arm64-on-M4 verified 2026-06-10 (micromamba + conda-forge MFA 3.3.9: align + g2p both work; ~30 s startup overhead per `mfa align` run). Subprocess boundary keeps it swappable. Sole aligner: if it degrades on real footage, reassess openly, never silently.
 - **Master disk cost** (~15–25 GB/hour 1080p30 all-intra) — accepted for seek quality; masters are per-project and prunable; revisit codec only with measurements in hand
 - **Hundred-segment sub-second EDL preview unproven** — all-intra master is the mitigation; M5 gate: 100 × 200 ms segments play without drops/gaps (mpv stats)
 - **mpv audition latency unmeasured** — measure in M4; rodio + pre-decoded PCM fallback if needed

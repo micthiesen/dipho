@@ -9,7 +9,21 @@ uv run dipho-ingest --workdir <corpus_dir>/ingest/<origin_id>/
 
 The Rust caller creates the workdir (keyed by **origin_id**), runs download + normalization as the first stages (playback master + analysis wav — mono 16 kHz pcm_s16le sharing the master's `aresample=async=1:first_pts=0` audio chain, so wav time == master time by construction), hard-links the wav into the workdir, and owns the `sources` row. The sidecar errors if the workdir is missing. **Every timestamp the sidecar emits is master-relative**; chunk-time rebasing happens inside the sidecar, never in the loader.
 
-Planned heavy dependencies (not installed yet): mlx-whisper (transcription, Metal), WhisperX (word alignment — word timestamps ONLY, no phonemes), pyannote.audio 4.x (diarization, MPS, HF-gated), librosa (pyin f0, RMS, MFCC), num2words (text normalization). MFA (`english_us_arpa` align + g2p) is NOT a Python dep: CLI subprocess in its own micromamba env. Sole aligner — no fallback.
+Dependencies (one uv env — whisperx ≥ 3.8 depends on pyannote 4.x directly, so no env split is needed): mlx-whisper (transcription, Metal), WhisperX (word alignment — word timestamps ONLY, no phonemes), pyannote.audio 4.x (diarization, MPS, HF-gated), librosa (pyin f0, RMS, MFCC), num2words (text normalization), praatio (TextGrid parsing). MFA (`english_us_arpa` align + g2p) is NOT a Python dep: CLI subprocess in its own micromamba env. Sole aligner — no fallback.
+
+## One-time setup
+
+```bash
+brew install micromamba
+micromamba create -y -n mfa -c conda-forge montreal-forced-aligner
+micromamba run -p ~/micromamba/envs/mfa mfa model download acoustic english_us_arpa
+micromamba run -p ~/micromamba/envs/mfa mfa model download dictionary english_us_arpa
+micromamba run -p ~/micromamba/envs/mfa mfa model download g2p english_us_arpa
+```
+
+The sidecar invokes MFA as `micromamba run -p ~/micromamba/envs/mfa mfa` (explicit prefix — brew's micromamba roots its env prefix inside the Cellar); override with `DIPHO_MFA_CMD`.
+
+Diarization is HF-gated and **not optional**: accept the license for `pyannote/speaker-diarization-community-1` on Hugging Face, then `uv run hf auth login` (or set `HF_TOKEN`).
 
 ## Staged work dir
 
@@ -24,9 +38,10 @@ Planned heavy dependencies (not installed yet): mlx-whisper (transcription, Meta
   diarization.json   # raw speaker turns
   prosody.npz        # float32 arrays: f0[], rms_db[], mfcc[n_frames, 13]
   manifest.json      # the contract — written last; the commit record
+  mfa/               # MFA scratch (chunk corpus, dict, temp) — deleted on stage success
 ```
 
-**Integrity protocol:** every stage writes `<name>.tmp`, fsyncs the file, renames, fsyncs the directory. Each JSON stage embeds `{"stage_schema_version": 1, "input_fingerprint": "<sha256>"}` over the upstream stage files it consumed. "Valid" = parses + version known + fingerprint chain matches; a mismatch invalidates that stage and everything downstream. Re-running skips valid stages — a pyannote crash 90 minutes in costs one stage. A workdir without `manifest.json` is incomplete by definition. All paths in the manifest are workdir-relative.
+**Integrity protocol:** every stage writes `<name>.tmp`, fsyncs the file, renames, fsyncs the directory. Each JSON stage embeds `{"stage_schema_version": 1, "input_fingerprint": "<sha256>"}` over the upstream stage files it consumed (`prosody.npz` embeds the same two fields, plus its parameters, as 0-d string arrays). "Valid" = parses + version known + fingerprint chain matches; a mismatch invalidates that stage and everything downstream. Re-running skips valid stages — a pyannote crash 90 minutes in costs one stage. A workdir without `manifest.json` is incomplete by definition. All paths in the manifest are workdir-relative.
 
 stdout is NDJSON progress: `{"stage": "diarize", "pct": 40}` per tick, terminal `{"done": true}` or `{"error": {"stage": "...", "message": "..."}}` — these feed the TUI's `Event::Job`.
 
@@ -44,7 +59,7 @@ Versioned with `schema_version`; the loader rejects unknown versions.
     "mfa": "3.3.9", "mfa_acoustic": "english_us_arpa", "mfa_g2p": "english_us_arpa",
     "pyannote": "…",
     "prosody_params": { "fmin": 50, "fmax": 650, "hop": 0.01, "frame_length": 1024,
-                        "mfcc_n": 13, "mfcc_window": 0.025 }
+                        "mfcc_n": 13, "mfcc_window": 0.025, "rms_window": 0.025 }
   },
   "segments": [                    // WhisperX segment tier → utterances table
     { "text": "string", "start": 1.20, "end": 4.85,
