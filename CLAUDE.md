@@ -28,7 +28,7 @@ Three processes, each doing what it's best at:
 
 - **Rust core** (this workspace): corpus index, search, EDL, DSP, ratatui TUI, mpv control via JSON IPC
 - **mpv**: external window slave player for preview/audition (`--input-ipc-server`). Never render video in-terminal.
-- **Python sidecar** (`python/`): batch ingest only (mlx-whisper transcribe → WhisperX word align → MFA phone align → pyannote diarization → librosa prosody). Contract: media in → alignment/diarization/features JSON out.
+- **Python sidecar** (`python/`): batch ingest only (mlx-whisper transcribe → WhisperX word align → MFA phone align → pyannote diarization → librosa prosody). Contract: staged work dir + `manifest.json`, NDJSON progress on stdout (see python/README.md).
 
 ```
 crates/

@@ -14,7 +14,7 @@ decision below is ready to ratify or veto; sources cited by report number.
    boundaries. faster-whisper has no Metal backend, so mlx-whisper
    large-v3-turbo does transcription on the M4 Max GPU. (Report 04)
 
-2. **Keep a pure-pip fallback aligner and make the SQLite phone schema aligner-agnostic.**
+2. **[VETOED 2026-06-10 — MFA is the sole aligner, no fallback backend; see DESIGN.md] ~~Keep a pure-pip fallback aligner and make the SQLite phone schema aligner-agnostic.~~**
    Fallback: phonemizer/espeak-ng → `facebook/wav2vec2-lv-60-espeak-cv-ft` →
    `torchaudio.functional.forced_align` (explicitly preserved in torchaudio
    2.10). Softer CTC boundaries are acceptable because post-MVP DSP cut

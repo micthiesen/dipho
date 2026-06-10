@@ -1,7 +1,8 @@
 //! The Corpus: an addressable phonetic index over immutable sources.
 //!
 //! One SQLite database per corpus. Planned tables (see DESIGN.md): sources,
-//! words (FTS5), phonemes, diphones (+ n-gram table), prosody, speakers.
+//! ingest_runs, utterances (FTS5 document unit), words, phones, diphones
+//! (seq-ordinal adjacency, boundary features), prosody_frames, speakers.
 //! Schema lands in milestone 1; this module is the handle and error type.
 
 use std::path::Path;

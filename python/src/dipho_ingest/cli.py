@@ -1,8 +1,9 @@
 """Entry point stub. Pipeline (milestone: ingest):
 
-media file -> WhisperX transcription + forced alignment (word + phoneme
-timestamps) -> pyannote speaker diarization -> prosody features (f0, RMS)
--> JSON document on stdout (contract: python/README.md).
+analysis wav -> mlx-whisper transcription -> WhisperX word alignment ->
+text normalization + MFA g2p/align subprocess (phone tier, rebased) ->
+pyannote speaker turns -> pyin/RMS prosody -> staged work dir +
+manifest.json, NDJSON progress on stdout (contract: python/README.md).
 """
 
 import argparse
