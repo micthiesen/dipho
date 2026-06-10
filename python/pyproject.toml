@@ -1,0 +1,18 @@
+[project]
+name = "dipho-ingest"
+version = "0.1.0"
+description = "Batch ingest sidecar for dipho: media in, alignment/diarization/features JSON out"
+requires-python = ">=3.12"
+dependencies = [
+    # Planned (heavy — install when ingest lands, see docs/research/):
+    #   whisperx        — transcription + forced alignment (word/phoneme timestamps)
+    #   pyannote.audio  — speaker diarization
+    #   librosa or pyworld — f0 / RMS prosody features
+]
+
+[project.scripts]
+dipho-ingest = "dipho_ingest.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11,<0.13"]
+build-backend = "uv_build"
