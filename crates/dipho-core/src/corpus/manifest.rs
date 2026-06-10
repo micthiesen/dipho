@@ -89,6 +89,15 @@ pub struct Turn {
 pub struct Chunk {
     pub start: f64,
     pub end: f64,
+    /// False when MFA could not align the chunk within its retry beam:
+    /// the span has no phone tier (word-searchable, never
+    /// phone-addressable). Defaults true for older manifests.
+    #[serde(default = "default_true")]
+    pub aligned: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -99,4 +108,18 @@ pub struct ProsodyMeta {
     /// Must equal `1 + floor(duration / hop)`; the loader rejects
     /// violations.
     pub n_frames: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunk_aligned_parses_and_defaults_true() {
+        let chunk: Chunk = serde_json::from_str(r#"{ "start": 0.0, "end": 1.0 }"#).unwrap();
+        assert!(chunk.aligned);
+        let chunk: Chunk =
+            serde_json::from_str(r#"{ "start": 0.0, "end": 1.0, "aligned": false }"#).unwrap();
+        assert!(!chunk.aligned);
+    }
 }

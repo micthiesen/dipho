@@ -27,3 +27,6 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# Project corpus + ingest workdirs (downloads, masters, stage files)
+.dipho/

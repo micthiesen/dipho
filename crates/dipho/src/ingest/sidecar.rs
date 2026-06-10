@@ -61,6 +61,10 @@ pub fn run_sidecar(workdir: &Path) -> Result<()> {
                     .and_then(Value::as_str)
                     .unwrap_or("unknown error"),
             ));
+        } else if let (Some(stage), Some(warning)) =
+            (msg["stage"].as_str(), msg["warning"].as_str())
+        {
+            println!("  {stage:<12} warning: {warning}");
         } else if let (Some(stage), Some(pct)) = (msg["stage"].as_str(), msg["pct"].as_i64()) {
             let skipped = if msg["skipped"].as_bool() == Some(true) {
                 " (cached)"

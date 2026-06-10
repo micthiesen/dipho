@@ -19,7 +19,7 @@ from .stages import load_stage_json, write_stage_json
 
 NAME = "align_phones"
 OUTPUT = "phones.json"
-VERSION = 1
+VERSION = 2
 INPUTS = ["audio.wav", words.OUTPUT]
 
 ACOUSTIC = "english_us_arpa"
@@ -186,10 +186,24 @@ def run(workdir: Path, progress: Progress) -> None:
     progress.tick(NAME, 80)
 
     phones: list[dict] = []
+    chunk_meta: list[dict] = []
     for i, chunk in enumerate(chunks):
-        phones.extend(
-            _parse_chunk(out / f"chunk-{i:04d}.TextGrid", chunk, per_chunk_tokens[i], duration)
-        )
+        tg_path = out / f"chunk-{i:04d}.TextGrid"
+        # MFA emits no TextGrid for an utterance it cannot align within its
+        # retry beam (hallucinated transcripts, music, crosstalk — routine
+        # in found footage). Degrade gracefully: no phones for that span, so
+        # it stays word-searchable but never phone-addressable. A garbage
+        # forced alignment would be worse than an honest gap.
+        aligned = tg_path.exists()
+        if aligned:
+            phones.extend(_parse_chunk(tg_path, chunk, per_chunk_tokens[i], duration))
+        else:
+            progress.warn(
+                NAME,
+                f"chunk {i} ({chunk['start']:.2f}-{chunk['end']:.2f}s) could not be "
+                f"aligned - no phones for this span",
+            )
+        chunk_meta.append({"start": chunk["start"], "end": chunk["end"], "aligned": aligned})
 
     write_stage_json(
         workdir,
@@ -201,7 +215,7 @@ def run(workdir: Path, progress: Progress) -> None:
             "acoustic_model": ACOUSTIC,
             "dictionary": DICTIONARY,
             "g2p_model": G2P,
-            "chunks": [{"start": c["start"], "end": c["end"]} for c in chunks],
+            "chunks": chunk_meta,
             "phonemes": phones,
         },
     )

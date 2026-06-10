@@ -32,6 +32,11 @@ class Progress:
             obj["skipped"] = True
         self._emit(obj)
 
+    def warn(self, stage: str, message: str) -> None:
+        """Non-fatal degradation the user should see (e.g. an unalignable
+        chunk). The stage still completes."""
+        self._emit({"stage": stage, "warning": message})
+
     def done(self) -> None:
         self._emit({"done": True})
 

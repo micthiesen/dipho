@@ -45,7 +45,7 @@ Diarization is HF-gated and **not optional**: accept the license for `pyannote/s
 
 **Integrity protocol:** every stage writes `<name>.tmp`, fsyncs the file, renames, fsyncs the directory. Each JSON stage embeds `{"stage_schema_version": 1, "input_fingerprint": "<sha256>"}` over the upstream stage files it consumed (`prosody.npz` embeds the same two fields, plus its parameters, as 0-d string arrays). "Valid" = parses + version known + fingerprint chain matches; a mismatch invalidates that stage and everything downstream. Re-running skips valid stages — a pyannote crash 90 minutes in costs one stage. A workdir without `manifest.json` is incomplete by definition. All paths in the manifest are workdir-relative.
 
-stdout is NDJSON progress: `{"stage": "diarize", "pct": 40}` per tick, terminal `{"done": true}` or `{"error": {"stage": "...", "message": "..."}}` — these feed the TUI's `Event::Job`.
+stdout is NDJSON progress: `{"stage": "diarize", "pct": 40}` per tick, `{"stage": "...", "warning": "..."}` for non-fatal degradation (e.g. an unalignable chunk), terminal `{"done": true}` or `{"error": {"stage": "...", "message": "..."}}` — these feed the TUI's `Event::Job`.
 
 ## manifest.json contract
 
@@ -84,8 +84,9 @@ Versioned with `schema_version`; the loader rejects unknown versions.
     { "speaker": "SPEAKER_00", "start": 0.0, "end": 14.2 }
   ],
   "chunks": [                      // MFA chunk spans, master-relative — the loader
-    { "start": 0.0, "end": 30.0 }  // inserts SIL adjacency terminators at their edges
-  ],
+    { "start": 0.0, "end": 30.0,   // inserts SIL adjacency terminators at their edges
+      "aligned": true }            // false: MFA gave up within its retry beam; the
+  ],                               // span has no phones (word-searchable only)
   "prosody": {
     "path": "prosody.npz",         // f0 (Hz, 0 = unvoiced), rms_db, mfcc[n,13]
     "hop": 0.01,                   // frame i centered at t = i*hop (librosa center=True)

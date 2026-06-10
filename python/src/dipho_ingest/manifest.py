@@ -70,9 +70,17 @@ def run(workdir: Path, progress: Progress) -> None:
             ],
             "phonemes": phones_doc["phonemes"],
             "turns": turns_doc["turns"],
+            # Spans recomputed from words.json (never read back from MFA
+            # state); the per-chunk `aligned` flag is genuinely the align
+            # stage's finding, joined by index — both sides derive the same
+            # chunk list from words.json, so strict zip is an invariant.
             "chunks": [
-                {"start": c["start"], "end": c["end"]}
-                for c in chunk_spans(words_doc["segments"], duration)
+                {"start": c["start"], "end": c["end"], "aligned": pc["aligned"]}
+                for c, pc in zip(
+                    chunk_spans(words_doc["segments"], duration),
+                    phones_doc["chunks"],
+                    strict=True,
+                )
             ],
             "prosody": {
                 "path": prosody.OUTPUT,
