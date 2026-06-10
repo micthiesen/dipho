@@ -4,7 +4,7 @@
 //! output is skipped on re-run; a workdir without `manifest.json` is
 //! incomplete by definition.
 
-mod normalize;
+pub(crate) mod normalize;
 mod origin;
 mod probe;
 mod sidecar;

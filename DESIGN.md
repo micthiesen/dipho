@@ -159,7 +159,7 @@ compile_ffmpeg(&Edl, &SourceMap) -> Result<FfmpegPlan, EdlCompileError>
 
 ### mpv slave lifecycle
 
-Spawn once: `mpv --idle=yes --keep-open=yes --no-terminal --input-ipc-server=$TMPDIR/dipho-mpv.sock` (short path — macOS `sun_path` ~104 bytes; socket 0600 — IPC exposes `run`). One persistent JSON IPC connection per session (closing drops `observe_property`). Correlate by `request_id`, never message order; `playback-restart` = seek-done. Audition = exact seek + `ab-loop-a`/`ab-loop-b` (clear with `"no"`).
+Spawn once: `mpv --idle=yes --keep-open=yes --no-terminal --input-ipc-server=<socket>`, where the socket lives in a fresh per-process 0700 temp directory (short path — macOS `sun_path` ~104 bytes; private because IPC exposes `run`), removed when the slave is dropped. One persistent JSON IPC connection per session (closing drops `observe_property`). Correlate by `request_id`, never message order; `playback-restart` = seek-done. Audition = exact seek + `ab-loop-a`/`ab-loop-b` (clear with `"no"`).
 
 **Player modes.** `PlayerMode { Audition(hit), Preview(output_pos) }`. Audition keys: loop-exact, play-with-context (±500 ms, no loop), play-full-utterance. In Preview, dipho owns compiled segment durations, so on recompile it computes current output-time, reloads, seeks back (clamped if the edit changed under the playhead), clearing ab-loops.
 
@@ -211,7 +211,7 @@ Post-MVP, rough order: transforms → waveform widget → diphone assembly searc
 - **MFA conda-only** — arm64-on-M4 verified 2026-06-10 (micromamba + conda-forge MFA 3.3.9: align + g2p both work; ~30 s startup overhead per `mfa align` run). Subprocess boundary keeps it swappable. Sole aligner: if it degrades on real footage, reassess openly, never silently.
 - **Master disk cost** (~15–25 GB/hour 1080p30 all-intra) — accepted for seek quality; masters are per-project and prunable; revisit codec only with measurements in hand
 - **Hundred-segment sub-second EDL preview unproven** — all-intra master is the mitigation; M5 gate: 100 × 200 ms segments play without drops/gaps (mpv stats)
-- **mpv audition latency unmeasured** — measure in M4; rodio + pre-decoded PCM fallback if needed
+- **mpv audition latency** — measured in M4 (M4 Max, real 1080p30 all-intra master, paused exact seeks): ~20 ms median seek → `playback-restart` round trip; no rodio path needed
 - **pyannote HF-gated** — token + license is a hard documented setup step
 - **Dependency rot killed the prior art** — yt-dlp unpinned, subprocess boundaries, staged re-runnable ingest, tools+parameters provenance per run
 - mlx-whisper `word_timestamps` memory growth — don't enable it; word times come from WhisperX align
@@ -222,7 +222,6 @@ Ratified 2026-06-10 (rounds 1–2): MFA sole aligner; ARPAbet `english_us_arpa`;
 
 Still open:
 
-- Audition latency budget via mpv before a rodio PCM path (measure in M4)
 - MFCC/pyin parameter validation against real found-footage joins (M2 corpora; parameters are standard but unvalidated on this domain)
 - Stutter `slice` default (fixed 60 ms? first-phone length? decide when the transform lands, post-MVP)
 
@@ -235,7 +234,7 @@ Deferred from the M1 review (do when their milestone lands, not before):
 Deferred from M2 (recorded 2026-06-10):
 
 - `phones.confidence` is a placeholder heuristic, not an acoustic score: 1.0, reduced to 0.5 within 100 ms of a chunk edge. Replace with real per-phone alignment scores (MFA exposes them via alignment analysis) when the solver's target cost starts consuming confidence — before tuning, not after
-- The mpv `time-pos` leg of the timebase integration tests needs the IPC client → M4. The wav-position legs (500 ms container offset, 300 ms mid-stream gap) pass as `#[ignore]` tests in `crates/dipho/src/ingest/normalize.rs`
+- ~~The mpv `time-pos` leg of the timebase integration tests needs the IPC client → M4~~ — closed in M4: both beep fixtures assert wav-time == mpv playback time (`--ao=pcm` dump position) == `time-pos` after exact seek, within one frame (`crates/dipho/src/mpv.rs` integration tests; the wav legs remain in `crates/dipho/src/ingest/normalize.rs`)
 - ~~The yt-dlp URL download path is implemented but unexercised~~ — verified in M3 (real YouTube ingest end to end, origin_id idempotency re-checked)
 
 Deferred from M3 (recorded 2026-06-10):

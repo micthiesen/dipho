@@ -16,6 +16,8 @@ pub struct SearchHit {
     pub source_id: SourceId,
     /// The source's origin (URL or path), for display.
     pub origin: String,
+    /// The source's playback master, for audition.
+    pub master_path: String,
     pub t_start: f64,
     pub t_end: f64,
     /// Raw ASR text, for display.
@@ -59,7 +61,8 @@ pub fn search(conn: &Connection, query: &str) -> Result<Vec<SearchHit>, CorpusEr
 
     let mut hits = Vec::new();
     let mut stmt = conn.prepare(
-        "SELECT u.id, u.source_id, src.origin, u.t_start, u.t_end, u.text,
+        "SELECT u.id, u.source_id, src.origin, src.master_path,
+                u.t_start, u.t_end, u.text,
                 coalesce(s.name, s.label), u.multi_speaker, u.confidence
          FROM utterances_fts f
          JOIN utterances u ON u.id = f.rowid
@@ -96,12 +99,13 @@ pub fn search(conn: &Connection, query: &str) -> Result<Vec<SearchHit>, CorpusEr
             utterance_id,
             source_id: SourceId(row.get(1)?),
             origin: row.get(2)?,
-            t_start: row.get(3)?,
-            t_end: row.get(4)?,
-            text: row.get(5)?,
-            speaker: row.get(6)?,
-            multi_speaker: row.get(7)?,
-            confidence: row.get(8)?,
+            master_path: row.get(3)?,
+            t_start: row.get(4)?,
+            t_end: row.get(5)?,
+            text: row.get(6)?,
+            speaker: row.get(7)?,
+            multi_speaker: row.get(8)?,
+            confidence: row.get(9)?,
             words,
             matches,
         });
@@ -271,6 +275,7 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].speaker.as_deref(), Some("SPEAKER_00"));
         assert_eq!(hits[0].confidence, Some(0.9));
+        assert_eq!(hits[0].master_path, "master.mkv");
         // Source B has no turns: no speaker; null confidence passes through.
         let hits = run(&corpus, "again");
         assert_eq!(hits[0].speaker, None);

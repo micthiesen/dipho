@@ -13,7 +13,7 @@ cargo build                     # Build the workspace
 cargo test                      # Run all tests
 cargo clippy -- -D warnings     # Lint (warnings are errors)
 cargo fmt                       # Format code
-cargo run -p dipho              # Run the TUI (search UI)
+cargo run -p dipho              # Run the TUI (search + mpv audition)
 cargo run -p dipho -- ingest <url|file>   # Build the corpus (--corpus overrides ./.dipho/corpus.db)
 cargo run -p dipho -- search "twenty five"  # Word/phrase search, exact word spans
 
@@ -46,8 +46,9 @@ crates/
 │       ├── main.rs      # CLI entry (clap subcommands, global --corpus)
 │       ├── ingest/      # Staged ingest driver: origin/idempotency, master+wav, sidecar
 │       ├── search.rs    # `dipho search` CLI
-│       ├── tui/         # Elm-style event loop: app, event, db (reader thread), ui
-│       └── mpv.rs       # mpv JSON IPC client — stub until M4
+│       ├── tui/         # Elm-style event loop: app, event, db (reader thread),
+│       │                #   player (mpv audition actor), ui
+│       └── mpv.rs       # mpv JSON IPC client + slave lifecycle (spawn, probe)
 python/                  # uv project: ingest sidecar (WhisperX + pyannote planned)
 docs/                    # DESIGN.md is canonical; research reports in docs/research/
 ```

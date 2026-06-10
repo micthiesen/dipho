@@ -10,6 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table};
 
 use super::app::App;
+use super::player::PlayerUpdate;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let [input_area, results_area, status_area] = Layout::vertical([
@@ -75,15 +76,41 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     .block(Block::bordered().title(title));
     frame.render_stateful_widget(table, results_area, &mut app.table);
 
-    let status = match (&app.note, app.searching) {
-        (Some(note), _) => Line::from(note.clone().red()),
-        (None, true) => Line::from("searching…".yellow()),
-        (None, false) => Line::from(vec![
-            Span::raw(format!("corpus: {}", app.corpus_db.display())),
-            Span::raw("   ↑/↓ select   Esc quit").dark_gray(),
-        ]),
+    let mut status = match (&app.note, app.searching) {
+        (Some(note), _) => vec![note.clone().red(), Span::raw("   ")],
+        (None, true) => vec!["searching…".yellow(), Span::raw("   ")],
+        (None, false) => vec![Span::raw(format!("corpus: {}   ", app.corpus_db.display()))],
     };
-    frame.render_widget(Paragraph::new(status), status_area);
+    status.push(player_span(&app.player_state));
+    status.push(
+        Span::raw("   Enter loop  ^T context  ^U utterance  ^P stop  ↑/↓  Esc quit").dark_gray(),
+    );
+    frame.render_widget(Paragraph::new(Line::from(status)), status_area);
+}
+
+/// The audition player's corner of the status line.
+fn player_span(state: &Option<PlayerUpdate>) -> Span<'static> {
+    match state {
+        None => Span::raw("mpv: starting…").dark_gray(),
+        Some(PlayerUpdate::Ready { version }) => Span::raw(version.clone()).dark_gray(),
+        Some(PlayerUpdate::Playing {
+            label,
+            looped,
+            seek_ms,
+        }) => {
+            let mut text = format!("▶ {label}");
+            if *looped {
+                text.push_str(" ⟳");
+            }
+            if let Some(ms) = seek_ms {
+                text.push_str(&format!("  seek {ms} ms"));
+            }
+            Span::raw(text).green()
+        }
+        Some(PlayerUpdate::Done) => Span::raw("■ done"),
+        Some(PlayerUpdate::Stopped) => Span::raw("■ stopped"),
+        Some(PlayerUpdate::Failed(e)) => Span::raw(format!("mpv: {e}")).red(),
+    }
 }
 
 /// The utterance's normalized token stream as one line, every matched
@@ -116,11 +143,17 @@ mod tests {
 
     #[test]
     fn renders_hits_with_highlighted_matches() {
-        let mut app = App::new(PathBuf::from("test.db"), Err("no corpus here".to_string()));
+        let (player_tx, _player_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            PathBuf::from("test.db"),
+            Err("no corpus here".to_string()),
+            crate::tui::player::PlayerHandle { tx: player_tx },
+        );
         app.hits = vec![SearchHit {
             utterance_id: 1,
             source_id: SourceId(1),
             origin: "test".to_string(),
+            master_path: "master.mkv".to_string(),
             t_start: 2.0,
             t_end: 4.0,
             text: "25 plus 25".to_string(),

@@ -120,22 +120,21 @@ pub fn load_master_info(workdir: &Path) -> Result<Option<MasterInfo>> {
     Ok(Some(info))
 }
 
-/// Timebase integration tests (ROADMAP M2): a beep at a known presentation
-/// time must land at that exact time in the analysis wav, whatever container
-/// timestamp pathology the source carries. Spawn ffmpeg, so `#[ignore]` —
-/// run with `cargo test -p dipho -- --ignored`.
+/// Timebase fixtures shared by the M2 wav-leg tests below and the M4 mpv
+/// leg (`crate::mpv` integration tests): synthetic sources with a beep at
+/// a known presentation time and a deliberate container-timestamp
+/// pathology.
 #[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
+pub(crate) mod fixtures {
+    use std::fs;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
 
-    use super::*;
-
-    const BEEP_AT: f64 = 2.0;
+    pub const BEEP_AT: f64 = 2.0;
     /// One video frame at the fixtures' 30 fps.
-    const TOLERANCE: f64 = 1.0 / 30.0;
+    pub const TOLERANCE: f64 = 1.0 / 30.0;
 
-    fn ffmpeg(args: &[&str]) {
+    pub fn ffmpeg(args: &[&str]) {
         let status = Command::new("ffmpeg")
             .args(["-y", "-v", "error"])
             .args(args)
@@ -145,7 +144,7 @@ mod tests {
     }
 
     /// 4 s of silence with a 200 ms 1 kHz beep starting at `BEEP_AT`.
-    fn beep_wav(dir: &Path) -> PathBuf {
+    pub fn beep_wav(dir: &Path) -> PathBuf {
         let path = dir.join("beep.wav");
         ffmpeg(&[
             "-f",
@@ -161,41 +160,12 @@ mod tests {
         path
     }
 
-    /// First time the analysis wav's 5 ms-window RMS exceeds a tenth of
-    /// full scale — the beep onset.
-    fn beep_onset(wav: &Path) -> f64 {
-        let bytes = fs::read(wav).unwrap();
-        let data_start = bytes
-            .windows(4)
-            .position(|w| w == b"data")
-            .expect("wav data chunk")
-            + 8;
-        let samples: Vec<f64> = bytes[data_start..]
-            .chunks_exact(2)
-            .map(|c| i16::from_le_bytes([c[0], c[1]]) as f64 / i16::MAX as f64)
-            .collect();
-        let window = 16_000 / 200; // 5 ms at the analysis rate
-        samples
-            .chunks(window)
-            .position(|w| (w.iter().map(|s| s * s).sum::<f64>() / w.len() as f64).sqrt() > 0.1)
-            .map(|i| i as f64 * window as f64 / 16_000.0)
-            .expect("no beep found in analysis wav")
-    }
-
-    fn run_normalize(dir: &Path, original: &Path) -> PathBuf {
-        fs::copy(original, dir.join("original.bin")).unwrap();
-        create_master(dir).unwrap();
-        dir.join("audio.wav")
-    }
-
-    #[test]
-    #[ignore = "spawns ffmpeg (M2 timebase integration test)"]
-    fn container_offset_is_neutralized() {
-        let dir = tempfile::tempdir().unwrap();
-        let beep = beep_wav(dir.path());
-        // A deliberate 500 ms container offset on the audio stream: the
-        // beep's presentation time becomes BEEP_AT + 0.5.
-        let source = dir.path().join("offset.mp4");
+    /// A deliberate 500 ms container offset on the audio stream: the
+    /// beep's presentation time becomes `BEEP_AT + 0.5`. Returns the
+    /// source and that expected onset.
+    pub fn offset_source(dir: &Path) -> (PathBuf, f64) {
+        let beep = beep_wav(dir);
+        let source = dir.join("offset.mp4");
         ffmpeg(&[
             "-f",
             "lavfi",
@@ -217,24 +187,15 @@ mod tests {
             "aac",
             source.to_str().unwrap(),
         ]);
-        let wav = run_normalize(dir.path(), &source);
-        let onset = beep_onset(&wav);
-        assert!(
-            (onset - (BEEP_AT + 0.5)).abs() <= TOLERANCE,
-            "beep at {onset}, expected {}",
-            BEEP_AT + 0.5
-        );
+        (source, BEEP_AT + 0.5)
     }
 
-    #[test]
-    #[ignore = "spawns ffmpeg (M2 timebase integration test)"]
-    fn midstream_timestamp_gap_is_filled_with_silence() {
-        let dir = tempfile::tempdir().unwrap();
-        let beep = beep_wav(dir.path());
-        // A 300 ms pts jump at t = 1.5 (before the beep): every later frame
-        // shifts +0.3, so the beep's presentation time becomes BEEP_AT + 0.3.
-        // pcm in matroska keeps the gapped packet timestamps verbatim.
-        let source = dir.path().join("gapped.mkv");
+    /// A 300 ms pts jump at t = 1.5 (before the beep): every later frame
+    /// shifts +0.3, so the beep's presentation time becomes `BEEP_AT +
+    /// 0.3`. pcm in matroska keeps the gapped packet timestamps verbatim.
+    pub fn gapped_source(dir: &Path) -> (PathBuf, f64) {
+        let beep = beep_wav(dir);
+        let source = dir.join("gapped.mkv");
         ffmpeg(&[
             "-f",
             "lavfi",
@@ -256,12 +217,70 @@ mod tests {
             "pcm_s16le",
             source.to_str().unwrap(),
         ]);
+        (source, BEEP_AT + 0.3)
+    }
+
+    /// First time the wav's 5 ms-window RMS exceeds a tenth of full scale
+    /// — the beep onset. Expects 16 kHz mono s16le.
+    pub fn beep_onset(wav: &Path) -> f64 {
+        let bytes = fs::read(wav).unwrap();
+        let data_start = bytes
+            .windows(4)
+            .position(|w| w == b"data")
+            .expect("wav data chunk")
+            + 8;
+        let samples: Vec<f64> = bytes[data_start..]
+            .chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]) as f64 / i16::MAX as f64)
+            .collect();
+        let window = 16_000 / 200; // 5 ms at the analysis rate
+        samples
+            .chunks(window)
+            .position(|w| (w.iter().map(|s| s * s).sum::<f64>() / w.len() as f64).sqrt() > 0.1)
+            .map(|i| i as f64 * window as f64 / 16_000.0)
+            .expect("no beep found in analysis wav")
+    }
+
+    /// Copy `original` into `dir` as the staged download and run the
+    /// normalize stage there; returns the analysis wav.
+    pub fn run_normalize(dir: &Path, original: &Path) -> PathBuf {
+        fs::copy(original, dir.join("original.bin")).unwrap();
+        super::create_master(dir).unwrap();
+        dir.join("audio.wav")
+    }
+}
+
+/// Timebase integration tests (ROADMAP M2), wav leg: a beep at a known
+/// presentation time must land at that exact time in the analysis wav,
+/// whatever container timestamp pathology the source carries. Spawn
+/// ffmpeg, so `#[ignore]` — run with `cargo test -p dipho -- --ignored`.
+#[cfg(test)]
+mod tests {
+    use super::fixtures::*;
+
+    #[test]
+    #[ignore = "spawns ffmpeg (M2 timebase integration test)"]
+    fn container_offset_is_neutralized() {
+        let dir = tempfile::tempdir().unwrap();
+        let (source, expected) = offset_source(dir.path());
         let wav = run_normalize(dir.path(), &source);
         let onset = beep_onset(&wav);
         assert!(
-            (onset - (BEEP_AT + 0.3)).abs() <= TOLERANCE,
-            "beep at {onset}, expected {}",
-            BEEP_AT + 0.3
+            (onset - expected).abs() <= TOLERANCE,
+            "beep at {onset}, expected {expected}"
+        );
+    }
+
+    #[test]
+    #[ignore = "spawns ffmpeg (M2 timebase integration test)"]
+    fn midstream_timestamp_gap_is_filled_with_silence() {
+        let dir = tempfile::tempdir().unwrap();
+        let (source, expected) = gapped_source(dir.path());
+        let wav = run_normalize(dir.path(), &source);
+        let onset = beep_onset(&wav);
+        assert!(
+            (onset - expected).abs() <= TOLERANCE,
+            "beep at {onset}, expected {expected}"
         );
     }
 }

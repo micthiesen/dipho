@@ -1,7 +1,9 @@
-//! The one merged event enum. All producers (terminal, db) feed a single
-//! mpsc; the app loop is the single consumer.
+//! The one merged event enum. All producers (terminal, db, player) feed a
+//! single mpsc; the app loop is the single consumer.
 
 use dipho_core::corpus::SearchHit;
+
+use super::player::PlayerUpdate;
 
 pub enum Event {
     /// A terminal event from crossterm's event stream.
@@ -12,4 +14,6 @@ pub enum Event {
         generation: u64,
         result: Result<Vec<SearchHit>, String>,
     },
+    /// Audition player status (mpv readiness, playback, seek latency).
+    Player(PlayerUpdate),
 }

@@ -5,6 +5,7 @@
 mod app;
 mod db;
 mod event;
+mod player;
 mod ui;
 
 use std::path::PathBuf;
@@ -39,7 +40,11 @@ async fn run_app(corpus_db: PathBuf) -> Result<()> {
             }
         }
     });
-    let mut app = App::new(corpus_db.clone(), db::spawn(&corpus_db, tx.clone()));
+    let mut app = App::new(
+        corpus_db.clone(),
+        db::spawn(&corpus_db, tx.clone()),
+        player::spawn(tx.clone()),
+    );
 
     let result = event_loop(&mut terminal, &mut app, &mut rx).await;
     ratatui::restore();
