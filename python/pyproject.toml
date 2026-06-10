@@ -9,8 +9,8 @@ dependencies = [
     #   whisperx        — word-level forced alignment (word timestamps ONLY)
     #   pyannote.audio  — speaker diarization (4.x, MPS, HF-gated)
     #   librosa         — f0 / RMS prosody features
-    # MFA (phone alignment) is NOT a Python dep: CLI subprocess in its own
-    # micromamba env. Fallback phone aligner: phonemizer + torchaudio.
+    # MFA (phone alignment, english_us_arpa) is NOT a Python dep: CLI
+    # subprocess in its own micromamba env. Sole aligner — no fallback.
 ]
 
 [project.scripts]

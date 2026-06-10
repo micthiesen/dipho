@@ -36,7 +36,9 @@ yt-dlp URL or local file
   → write to corpus SQLite
 ```
 
-Fallback phoneme aligner (pure pip, softer boundaries — acceptable because post-MVP DSP cut refinement re-snaps cuts): phonemizer/espeak-ng → `facebook/wav2vec2-lv-60-espeak-cv-ft` → `torchaudio.functional.forced_align`. The phones schema is aligner-agnostic (`aligner_id` + per-phone confidence) so both backends coexist.
+MFA is the only phoneme aligner — no fallback backend (ratified 2026-06-10: best version, no degraded modes; cut-point precision is the product). The protection against MFA rot is structural, not a second pipeline: it runs as a CLI subprocess in an isolated env, so it can be swapped without touching the schema or the Rust side. Diarization is likewise a hard part of ingest: pyannote's HF token + one-time license acceptance is a documented setup prerequisite, not an optional path.
+
+Phone labels are **ARPAbet** (MFA `english_us_arpa` models, CMUdict-compatible).
 
 Environment strategy — learned from why sentence-mixing died (pinned MFA 1.1.0-beta binary, yt-dlp 2022): fragile tools live behind subprocess boundaries (MFA is CLI-only, in its own micromamba env; WhisperX's heavily-pinned deps isolated from everything else), and yt-dlp stays unpinned.
 
@@ -59,7 +61,7 @@ One SQLite database per corpus (rusqlite, bundled — no system dependency):
 - `prosody` — per-unit f0 mean/contour summary, RMS energy (columns on the unit tables or a sidecar table; needed by the join-cost solver later, so it ships in the schema now)
 - `speakers` — diarization clusters, optional human-assigned names
 
-Phone rows carry `aligner_id` and a confidence column so MFA and the CTC fallback aligner can coexist in one corpus.
+Phone rows carry a confidence column (the solver's target cost wants it); labels are ARPAbet.
 
 Schema rule: **post-MVP features (solver, join cost) must be servable from this schema without rework.** Prosody and diphone tables exist from day one even though MVP only reads `words`.
 
@@ -156,21 +158,19 @@ Post-MVP, in rough order: transforms beyond cut/concat, diphone assembly search,
 ## Risk register
 
 - **mpv EDL v0 is unfrozen** — mitigated by the version probe, single serializer module, golden tests
-- **MFA is conda-only in practice** (Kaldi/pynini binaries; hence the micromamba env) and arm64-on-M4 is not yet smoke-tested — early spike required; the CTC fallback aligner is the escape hatch. An MFA version pin is exactly what killed sentence-mixing; the subprocess boundary is the mitigation.
+- **MFA is conda-only in practice** (Kaldi/pynini binaries; hence the micromamba env) and arm64-on-M4 is not yet smoke-tested — this is the first task of M2, so failure surfaces in an hour, not mid-milestone. An MFA version pin is exactly what killed sentence-mixing; the subprocess boundary (swappable without schema changes) is the mitigation.
 - **mpv audition latency on sub-second units is unmeasured** — measure before adopting any audio crate; rodio + pre-decoded PCM is the fallback
-- **pyannote community-1 is HF-gated** — ingest needs an HF token + one-time license acceptance (setup prerequisite)
-- **Dependency rot killed the prior art** — counter-policy: yt-dlp unpinned, fragile tools behind subprocess boundaries, aligner-agnostic schema
+- **pyannote community-1 is HF-gated** — ingest needs an HF token + one-time license acceptance (hard setup prerequisite; diarization is not optional)
+- **Dependency rot killed the prior art** — counter-policy: yt-dlp unpinned, fragile tools behind subprocess boundaries
 - mlx-whisper has a reported memory-growth issue with `word_timestamps` on long audio — don't enable it; word times come from WhisperX align
 
 ## Open questions
 
-Resolved by the 2026-06 research pass: WhisperX is word-level only (MFA/CTC supplies phones); Whisper backend on Apple Silicon is mlx-whisper (faster-whisper has no Metal backend).
+Resolved by the 2026-06 research pass: WhisperX is word-level only (MFA supplies phones); Whisper backend on Apple Silicon is mlx-whisper (faster-whisper has no Metal backend).
 
-Owner-level calls still open (see docs/research/SUMMARY.md):
+Ratified 2026-06-10: MFA is the sole phoneme aligner, no fallback backend (best version over degraded modes); ARPAbet phone set (`english_us_arpa`); HF token is a hard ingest prerequisite; mpv floor is ≥0.38 enforced by the startup probe (no bundling).
 
-- Conda tolerance: micromamba-wrapped MFA in MVP ingest, or start on the pure-pip CTC fallback and adopt MFA later?
-- mpv version floor: pin/bundle a known version or support a range via the startup probe?
-- Phone set: MFA `english_mfa` vs ARPAbet `english_us_arpa` (CMUdict-compatible) — decides the canonical labels in the phones/diphones tables
-- HF token as a hard ingest prerequisite, or make diarization optional?
-- Latency budget for audition: what's "good enough" via mpv before investing in a rodio PCM path?
+Still open:
+
+- Latency budget for audition: what's "good enough" via mpv before investing in a rodio PCM path? (measure in M4)
 - EDL file format: JSON vs TOML (lean JSON for nested structure; revisit when the EDL type stabilizes)

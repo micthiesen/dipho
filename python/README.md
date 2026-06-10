@@ -31,7 +31,7 @@ Versioned with `schema_version`; the Rust loader rejects versions it doesn't kno
   ],
   "phonemes": [
     {
-      "label": "AA",           // ARPAbet (tentative — see DESIGN.md open questions)
+      "label": "AA",           // ARPAbet (ratified: MFA english_us_arpa)
       "start": 1.23,
       "end": 1.31,
       "word_index": 0          // index into words[], null for non-speech

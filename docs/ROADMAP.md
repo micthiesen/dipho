@@ -4,13 +4,13 @@ Small, verifiable increments. Each milestone ends with something runnable and a 
 
 ## M1 — Corpus schema + loader
 
-Schema migration v1 in `dipho-core::corpus`: sources, words (+FTS5), phonemes (aligner-agnostic: `aligner_id`, confidence), diphones (+ n-gram table), prosody, speakers. A loader that ingests the sidecar's JSON contract (fixture-driven — no real ML yet) and derives diphones from adjacent phone midpoints.
+Schema migration v1 in `dipho-core::corpus`: sources, words (+FTS5), phonemes (ARPAbet labels, confidence column), diphones (+ n-gram table), prosody, speakers. A loader that ingests the sidecar's JSON contract (fixture-driven — no real ML yet) and derives diphones from adjacent phone midpoints.
 
 **Verify:** `cargo test` round-trips a fixture JSON into an in-memory corpus; FTS5 finds a word; diphone rows have midpoint boundaries.
 
 ## M2 — Ingest pipeline (sidecar for real)
 
-`dipho ingest <url|file>`: yt-dlp/ffmpeg demux in Rust, then the sidecar with the real stack: mlx-whisper → WhisperX align → MFA subprocess → pyannote → librosa. Starts with the **MFA arm64 smoke-test spike** (risk register) — if MFA fights back, ship M2 on the CTC fallback aligner and revisit.
+`dipho ingest <url|file>`: yt-dlp/ffmpeg demux in Rust, then the sidecar with the real stack: mlx-whisper → WhisperX align → MFA subprocess (`english_us_arpa`) → pyannote → librosa. Starts with the **MFA arm64 smoke-test spike** (risk register) so failure surfaces in the first hour — MFA is the sole aligner, so if it's genuinely unworkable we reassess the design rather than silently shipping softer boundaries.
 
 **Verify:** ingest a short real video end to end; spot-check word timestamps in the DB against the audio.
 
