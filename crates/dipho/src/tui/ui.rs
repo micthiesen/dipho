@@ -46,7 +46,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Row::new(vec![
             Cell::from(format!("{}", hit.source_id.0)),
             Cell::from(format!("{:8.2}s", hit.t_start)),
-            Cell::from(hit.speaker.clone().unwrap_or_else(|| "—".to_string())),
+            Cell::from(match (&hit.speaker, hit.multi_speaker) {
+                // "+": a second speaker overlaps >20% of the utterance.
+                (Some(speaker), true) => format!("{speaker}+"),
+                (Some(speaker), false) => speaker.clone(),
+                (None, _) => "—".to_string(),
+            }),
             Cell::from(
                 hit.confidence
                     .map(|c| format!("{c:.2}"))

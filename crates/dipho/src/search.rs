@@ -40,11 +40,14 @@ pub fn run(query: &str, corpus_db: &Path) -> Result<()> {
     for hit in &hits {
         println!();
         println!(
-            "source {}  {:.2}–{:.2}s  {}  conf {}",
+            "source {} ({})  {:.2}–{:.2}s  {}{}  conf {}",
             hit.source_id.0,
+            hit.origin,
             hit.t_start,
             hit.t_end,
             hit.speaker.as_deref().unwrap_or("(unknown speaker)"),
+            // A second speaker overlaps more than 20% of the utterance.
+            if hit.multi_speaker { "+" } else { "" },
             hit.confidence
                 .map(|c| format!("{c:.2}"))
                 .as_deref()

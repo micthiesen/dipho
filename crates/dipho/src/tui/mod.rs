@@ -25,8 +25,11 @@ pub fn run(corpus_db: PathBuf) -> Result<()> {
 }
 
 async fn run_app(corpus_db: PathBuf) -> Result<()> {
-    let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
+    // Raw mode before any producer starts, so no input is ever read
+    // line-buffered.
+    let mut terminal = ratatui::init();
 
+    let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
     let term_tx = tx.clone();
     tokio::spawn(async move {
         let mut stream = EventStream::new();
@@ -36,10 +39,8 @@ async fn run_app(corpus_db: PathBuf) -> Result<()> {
             }
         }
     });
-
     let mut app = App::new(corpus_db.clone(), db::spawn(&corpus_db, tx.clone()));
 
-    let mut terminal = ratatui::init();
     let result = event_loop(&mut terminal, &mut app, &mut rx).await;
     ratatui::restore();
     result

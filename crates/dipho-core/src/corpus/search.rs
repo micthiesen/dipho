@@ -30,7 +30,9 @@ pub struct SearchHit {
 }
 
 impl SearchHit {
-    /// Exact source-time span of one phrase occurrence.
+    /// Exact source-time span of one phrase occurrence. `m` must be one of
+    /// this hit's `matches` (search never emits an empty or out-of-bounds
+    /// range); anything else may panic.
     pub fn match_span(&self, m: &std::ops::Range<usize>) -> (f64, f64) {
         (self.words[m.start].t_start, self.words[m.end - 1].t_end)
     }
@@ -49,8 +51,10 @@ pub fn search(conn: &Connection, query: &str) -> Result<Vec<SearchHit>, CorpusEr
     if tokens.is_empty() {
         return Ok(Vec::new());
     }
-    // Tokens contain only [a-z0-9'] — safe inside an FTS5 string. The
-    // quoted form is a phrase query; a single token degenerates to a term.
+    // Tokens contain only [a-z0-9'] and are non-empty after stripping
+    // apostrophes (normalize_query's filter), so the quoted form can never
+    // be empty or escape the FTS5 string. It is a phrase query; a single
+    // token degenerates to a term.
     let fts_query = format!("\"{}\"", tokens.join(" "));
 
     let mut hits = Vec::new();

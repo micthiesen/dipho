@@ -29,6 +29,10 @@ impl DbHandle {
 
 /// Open the corpus and spawn the reader thread. On failure the TUI still
 /// runs, surfacing the problem in its status line instead of results.
+///
+/// The schema is checked once at open; each query then reads a consistent
+/// WAL snapshot, so a concurrent re-ingest is simply seen by the next
+/// search. Live schema migration under a running TUI is an M4+ concern.
 pub fn spawn(corpus_db: &Path, events: UnboundedSender<Event>) -> Result<DbHandle, String> {
     let corpus = crate::search::open_corpus(corpus_db).map_err(|e| e.to_string())?;
     let (tx, rx) = std_mpsc::channel::<SearchRequest>();
