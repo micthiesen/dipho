@@ -4,28 +4,31 @@ Batch ingest sidecar. Analyzes one media file through staged, resumable steps an
 
 ```bash
 uv sync
-uv run dipho-ingest <analysis-wav> --workdir <corpus_dir>/ingest/<content_hash>/
+uv run dipho-ingest --workdir <corpus_dir>/ingest/<origin_id>/
 ```
 
-The Rust caller prepares inputs (playback master + analysis wav — mono 16 kHz pcm_s16le extracted from the master with no seek/trim, so wav t=0 == master t=0) and owns the `sources` row. **Every timestamp the sidecar emits is master-relative**; chunk-time rebasing happens inside the sidecar, never in the loader.
+The Rust caller creates the workdir (keyed by **origin_id**), runs download + normalization as the first stages (playback master + analysis wav — mono 16 kHz pcm_s16le sharing the master's `aresample=async=1:first_pts=0` audio chain, so wav time == master time by construction), hard-links the wav into the workdir, and owns the `sources` row. The sidecar errors if the workdir is missing. **Every timestamp the sidecar emits is master-relative**; chunk-time rebasing happens inside the sidecar, never in the loader.
 
-Planned heavy dependencies (not installed yet): mlx-whisper (transcription, Metal), WhisperX (word alignment — word timestamps ONLY, no phonemes), pyannote.audio 4.x (diarization, MPS, HF-gated), librosa (pyin f0 + RMS), num2words (text normalization). MFA (`english_us_arpa` align + g2p) is NOT a Python dep: CLI subprocess in its own micromamba env. Sole aligner — no fallback.
+Planned heavy dependencies (not installed yet): mlx-whisper (transcription, Metal), WhisperX (word alignment — word timestamps ONLY, no phonemes), pyannote.audio 4.x (diarization, MPS, HF-gated), librosa (pyin f0, RMS, MFCC), num2words (text normalization). MFA (`english_us_arpa` align + g2p) is NOT a Python dep: CLI subprocess in its own micromamba env. Sole aligner — no fallback.
 
 ## Staged work dir
 
-Each stage file is fsynced on completion; re-running skips stages whose outputs exist and validate. A crash costs one stage, not the run.
-
 ```
 <workdir>/
+  original.bin       # raw download / copied local file (Rust stage)
+  master.mkv         # playback master (Rust stage)
+  audio.wav          # analysis wav (Rust stage)
   transcript.json    # mlx-whisper segments
   words.json         # WhisperX-aligned words + segment tier + normalized-token map
   phones.json        # MFA phone tier, rebased to master time
   diarization.json   # raw speaker turns
-  prosody.npz        # float32 f0[] and rms_db[] frame arrays
-  manifest.json      # the contract: everything below, referencing the files above
+  prosody.npz        # float32 arrays: f0[], rms_db[], mfcc[n_frames, 13]
+  manifest.json      # the contract — written last; the commit record
 ```
 
-stdout is NDJSON progress: `{"stage": "diarize", "pct": 40}` per tick, terminal `{"done": true}` or `{"error": {"stage": "...", "message": "..."}}`. These feed the TUI's `Event::Job` directly.
+**Integrity protocol:** every stage writes `<name>.tmp`, fsyncs the file, renames, fsyncs the directory. Each JSON stage embeds `{"stage_schema_version": 1, "input_fingerprint": "<sha256>"}` over the upstream stage files it consumed. "Valid" = parses + version known + fingerprint chain matches; a mismatch invalidates that stage and everything downstream. Re-running skips valid stages — a pyannote crash 90 minutes in costs one stage. A workdir without `manifest.json` is incomplete by definition. All paths in the manifest are workdir-relative.
+
+stdout is NDJSON progress: `{"stage": "diarize", "pct": 40}` per tick, terminal `{"done": true}` or `{"error": {"stage": "...", "message": "..."}}` — these feed the TUI's `Event::Job`.
 
 ## manifest.json contract
 
@@ -35,11 +38,13 @@ Versioned with `schema_version`; the loader rejects unknown versions.
 {
   "schema_version": 1,
   "analysis": { "path": "audio.wav", "duration": 1234.56 },
-  "tools": {                       // provenance, stored per ingest_run
-    "dipho_ingest": "0.1.0",
-    "mlx_whisper": "…", "whisperx": "…",
+  "tools": {                       // provenance, stored per ingest_run;
+    "dipho_ingest": "0.1.0",       // a change in ANY of these marks the
+    "mlx_whisper": "…", "whisperx": "…",   // source stale for `reingest --stale`
     "mfa": "3.3.9", "mfa_acoustic": "english_us_arpa", "mfa_g2p": "english_us_arpa",
-    "pyannote": "…"
+    "pyannote": "…",
+    "prosody_params": { "fmin": 50, "fmax": 650, "hop": 0.01, "frame_length": 1024,
+                        "mfcc_n": 13, "mfcc_window": 0.025 }
   },
   "segments": [                    // WhisperX segment tier → utterances table
     { "text": "string", "start": 1.20, "end": 4.85,
@@ -49,9 +54,8 @@ Versioned with `schema_version`; the loader rejects unknown versions.
     { "text": "string",            // normalized token (digits expanded etc.)
       "start": 1.23, "end": 1.56,
       "confidence": 0.97,
-      "segment_index": 0,
-      "speaker": "SPEAKER_00" }    // derived: maximal overlap vs turns; null if none
-  ],
+      "segment_index": 0 }         // NO speaker here: the loader is the sole
+  ],                               // owner of speaker derivation, from turns
   "phonemes": [
     { "label": "AA1",              // stress-marked ARPAbet as MFA emits it;
                                    // "SIL" for silence, "NOISE" for <spn>
@@ -59,20 +63,20 @@ Versioned with `schema_version`; the loader rejects unknown versions.
       "confidence": 0.92,          // nullable; reduced within 100 ms of a chunk edge
       "word_index": 0 }            // post-normalization mapping; null for SIL/NOISE
   ],
-  "turns": [                       // diarization source of truth
+  "turns": [                       // the ONLY speaker data the sidecar emits
     { "speaker": "SPEAKER_00", "start": 0.0, "end": 14.2 }
   ],
   "prosody": {
-    "path": "prosody.npz",         // f0 (Hz, 0 = unvoiced) and rms_db arrays
+    "path": "prosody.npz",         // f0 (Hz, 0 = unvoiced), rms_db, mfcc[n,13]
     "hop": 0.01,                   // frame i centered at t = i*hop (librosa center=True)
-    "n_frames": 123457             // must equal 1 + floor(duration/hop); loader rejects otherwise
+    "n_frames": 123457             // all three arrays; must equal 1 + floor(duration/hop)
   }
 }
 ```
 
 Notes:
 
-- Word `speaker` is derived (maximal temporal overlap; ties → earlier turn; zero overlap → null); `turns` is authoritative and the loader may re-derive.
+- Speaker labels on units are **loader-derived** from `turns` (maximal temporal overlap; ties → earlier; zero → null). The sidecar never assigns speakers to words.
 - `word_index` refers to the sidecar's own normalized-token mapping — never a positional zip of two tokenizers.
-- Diphones, cut points (per-phone-class), and all per-unit prosody aggregation are loader logic in Rust — re-deriving units never re-runs Python.
+- Diphones, cut points, SIL insertion/merging, adjacency, and all per-unit aggregation (prosody summaries, MFCC/f0/RMS boundary features) are loader logic in Rust — re-deriving units never re-runs Python.
 - MFA chunking (segment merge < 300 ms gaps, 250 ms pads, TextGrid parse + rebase) is internal to the sidecar and invisible in the contract.

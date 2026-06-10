@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Identifier of an immutable source in the corpus (SQLite rowid).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SourceId(pub i64);
 
 /// Which channels of the source a span addresses. Audio and video are

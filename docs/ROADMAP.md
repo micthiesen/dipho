@@ -1,20 +1,20 @@
 # Roadmap to MVP
 
-Small, verifiable increments. Each milestone ends with something runnable and a green `cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test`. Decisions in docs/research/SUMMARY.md were ratified 2026-06-10 with one veto: decision 2 (fallback aligner / `aligner_id`) is superseded — MFA is the sole aligner. DESIGN.md (revised after adversarial review round 1) is canonical.
+Small, verifiable increments. Each milestone ends with something runnable and a green `cargo fmt && cargo clippy --all-targets -- -D warnings && cargo test`. Decisions in docs/research/SUMMARY.md were ratified 2026-06-10 with one veto: decision 2 (fallback aligner / `aligner_id`) is superseded — MFA is the sole aligner. DESIGN.md (revised after adversarial review rounds 1–2) is canonical.
 
 ## M1 — Corpus schema + loader
 
-Schema migration v1 in `dipho-core::corpus` per DESIGN.md: sources (content_hash, master path), ingest_runs (tools provenance), utterances (+FTS5 content table), words, phones (stress-marked, `cut_t`, `weak_cut`), diphones (`seq` ordinal, stress-stripped label, boundary-feature columns), prosody_frames, speakers. WAL + busy_timeout + foreign_keys pragmas. A loader that consumes a fixture `manifest.json` (no real ML) and derives: utterances→words→phones with SIL/NOISE handling, per-class cut points, diphones under the adjacency rule, per-unit prosody aggregates + head/tail boundary features from fixture frames.
+Schema migration v1 in `dipho-core::corpus` per DESIGN.md: sources (origin_id UNIQUE, master_hash, fps, has_video), ingest_runs (tools + parameters provenance), utterances (+FTS5 external-content table with sync triggers), words, phones (stress-marked, `cut_t` NULL for SIL/NOISE, `weak_cut`, `sil_origin`), diphones (`seq` ordinal, stress-stripped label, materialized spans, six boundary-feature columns), prosody_frames (f0/rms_db/mfcc BLOBs), speakers (FK target, stale flag). WAL + busy_timeout + foreign_keys pragmas; single writer task. A loader that consumes a fixture `manifest.json` (no real ML) and derives: utterances→words→phones with SIL insertion/merging, the normative cut-point table, diphones under the adjacency rule, speaker derivation from turns, per-unit aggregates + MFCC/f0/RMS head/tail boundary features from fixture frames.
 
-**Verify:** fixture round-trip into in-memory corpus; FTS5 phrase query maps back to word spans; diphone rows have class-correct cut points; the adjacency fixture (silence, speaker turn, chunk edge, single-phone word) yields exactly the expected SIL-X/X-SIL units and nothing across boundaries; a repeated `seq+1` self-join finds a contiguous run.
+**Verify:** fixture round-trip into in-memory corpus; FTS5 phrase query maps back to word spans; diphone rows have class-correct cut points (incl. SIL-preceded stop = phone start); the adjacency fixture (silence **> 400 ms** so X-SIL.t_end ≠ SIL-Y.t_start is actually asserted, a zero-extent inserted SIL, a speaker turn, a chunk edge, a sub-20 ms NOISE excision, a single-phone word) yields exactly the expected units and nothing across boundaries; boundary features populated from mfcc fixture frames with the n<3 and unvoiced-NULL cases covered; a `seq+1` self-join finds a contiguous run; re-ingest of the fixture carries a named speaker forward and keeps FTS in sync.
 
 ## M2 — Ingest pipeline (sidecar for real)
 
 Starts with the **MFA arm64 smoke-test spike** (risk register) so failure surfaces in the first hour — MFA is the sole aligner; if it's genuinely unworkable we reassess the design rather than silently shipping softer boundaries.
 
-`dipho ingest <url|file>`: yt-dlp → playback master + analysis wav (one ffmpeg invocation, start_time ≈ 0 asserted) → sidecar stages (mlx-whisper → WhisperX align → text normalization + `mfa g2p` OOV handling → `mfa align` per padded chunk → pyannote turns → pyin/RMS prosody npz) → manifest → loader. NDJSON progress to the CLI. Content-hash idempotency.
+`dipho ingest <url|file>`: staged workdir keyed by origin_id (tmp+rename+fingerprint protocol) — original → playback master + analysis wav (shared aresample audio chain, discontinuity hard-fail) → sidecar stages (mlx-whisper → WhisperX align → text normalization + `mfa g2p` OOV handling → `mfa align` per padded chunk → pyannote turns → pyin/RMS/MFCC frames npz) → manifest → in-process loader. NDJSON progress to the CLI. origin_id idempotency.
 
-**Verify:** ingest a short real video end to end; spot-check word timestamps against audio (excluding reduced-confidence chunk-edge phones); **timebase integration test** — synthetic video with a beep at a known time and a deliberate 500 ms container offset: wav-time == mpv `time-pos` == rendered beep position within one video frame.
+**Verify:** ingest a short real video end to end; spot-check word timestamps against audio (excluding reduced-confidence chunk-edge phones); **timebase integration tests** — (a) synthetic video with a beep at a known time and a deliberate 500 ms container offset, (b) synthetic video with a 300 ms mid-stream audio timestamp gap: in both, wav-time == mpv `time-pos` == rendered beep position within one video frame; kill the sidecar mid-stage and confirm the re-run skips completed stages.
 
 ## M3 — Word search (CLI first, then TUI)
 
@@ -30,9 +30,9 @@ Hand-rolled IPC client (UnixStream, request_id correlation, event task), slave l
 
 ## M5 — Flat EDL + preview
 
-Edit model: clips with owned t_start/t_end + provenance, append/reorder/remove, **trim/nudge (±5 ms / ±25 ms with instant recompile + neighborhood replay)**, undo/redo stack, autosave + recovery; save/load with the `sources` manifest. EDL compiler v1: verbatim in-order compilation, join-elision only, `%<bytes>%` quoting, named params, `title=` labels; `edl://` reload preserving output-position (`PlayerMode::Preview`).
+Edit model: clips with owned t_start/t_end + provenance, append/reorder/remove, **trim/nudge (±5 ms / ±25 ms with instant recompile + neighborhood replay)**, undo/redo stack, autosave + recovery; save/load with the mandatory `sources` manifest + rebind precedence (master_hash → origin_id+warning → typed error). EDL compiler v1: verbatim in-order compilation, mandatory shared-pre-pass elision (empty-transform clips only, ≤ 1 ms), compile-time validation (InvalidSpan/InvalidTransform), `%<bytes>%` quoting, named params, `title=` labels; `edl://` reload preserving output-position (`PlayerMode::Preview`).
 
-**Verify:** golden-file tests (incl. repeated-span stutter fixture compiling to N segments and a join-elision case); build a 40-clip mix, preview gaplessly; **measured gate: 100 × 200 ms segments play without frame drops or audio gaps** (mpv stats) on the M4.
+**Verify:** golden-file tests — repeated span → N segments; both compilers emit identical output-time boundary lists for an elision fixture; two contiguous `Loop{2}` clips → four segments AABB; validation error cases. Build a 40-clip mix, preview gaplessly; **measured gate: 100 × 200 ms segments play without frame drops or audio gaps** (mpv stats) on the M4.
 
 ## M6 — Render (MVP complete)
 
