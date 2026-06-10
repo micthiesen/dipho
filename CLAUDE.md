@@ -13,7 +13,9 @@ cargo build                     # Build the workspace
 cargo test                      # Run all tests
 cargo clippy -- -D warnings     # Lint (warnings are errors)
 cargo fmt                       # Format code
-cargo run -p dipho              # Run the CLI/TUI
+cargo run -p dipho              # Run the TUI (search UI)
+cargo run -p dipho -- ingest <url|file>   # Build the corpus (--corpus overrides ./.dipho/corpus.db)
+cargo run -p dipho -- search "twenty five"  # Word/phrase search, exact word spans
 
 # Python ingest sidecar (batch only, never in the interactive loop)
 cd python && uv sync            # Install sidecar deps
@@ -35,14 +37,17 @@ crates/
 ├── dipho-core/          # Library: no TUI, no I/O policy
 │   └── src/
 │       ├── span.rs      # Span references: (source_id, t_start, t_end, channel)
-│       ├── corpus/      # SQLite index (rusqlite bundled): sources, words, diphones
-│       ├── edl/         # EDL-as-data: types + compile to mpv EDL / ffmpeg
-│       └── dsp/         # Cut refinement (zero-crossing snap, spectral flux) — stub
+│       ├── corpus/      # SQLite index (rusqlite bundled): schema, loader, FTS5
+│       │                #   search + query normalization (num2words port)
+│       ├── edl.rs       # EDL-as-data: types + compile to mpv EDL / ffmpeg
+│       └── dsp.rs       # Cut refinement (zero-crossing snap, spectral flux) — stub
 ├── dipho/               # Binary: clap CLI + ratatui TUI shell
 │   └── src/
-│       ├── main.rs      # CLI entry (clap subcommands)
-│       ├── tui/         # ratatui app shell
-│       └── mpv/         # mpv JSON IPC client
+│       ├── main.rs      # CLI entry (clap subcommands, global --corpus)
+│       ├── ingest/      # Staged ingest driver: origin/idempotency, master+wav, sidecar
+│       ├── search.rs    # `dipho search` CLI
+│       ├── tui/         # Elm-style event loop: app, event, db (reader thread), ui
+│       └── mpv.rs       # mpv JSON IPC client — stub until M4
 python/                  # uv project: ingest sidecar (WhisperX + pyannote planned)
 docs/                    # DESIGN.md is canonical; research reports in docs/research/
 ```
