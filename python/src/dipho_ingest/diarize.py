@@ -25,11 +25,17 @@ def valid(workdir: Path) -> bool:
 
 
 def run(workdir: Path, progress: Progress) -> None:
+    import numpy as np
     import soundfile
     import torch
     from pyannote.audio import Pipeline
 
-    duration = float(soundfile.info(workdir / "audio.wav").duration)
+    # Decode the wav ourselves: pyannote 4.x's built-in decoding goes
+    # through torchcodec, whose bundled dylibs only link FFmpeg 4–7 and
+    # fail against brew's FFmpeg 8.
+    samples, sr = soundfile.read(workdir / "audio.wav", dtype="float32")
+    duration = len(samples) / sr
+    waveform = torch.from_numpy(np.atleast_2d(samples))
     try:
         pipeline = Pipeline.from_pretrained(MODEL)
     except Exception as e:
@@ -41,14 +47,16 @@ def run(workdir: Path, progress: Progress) -> None:
     pipeline.to(torch.device("mps" if torch.backends.mps.is_available() else "cpu"))
     progress.tick(NAME, 20)
 
-    diarization = pipeline(str(workdir / "audio.wav"))
+    output = pipeline({"waveform": waveform, "sample_rate": sr})
+    # pyannote 4.x returns a DiarizeOutput; the raw (possibly overlapping)
+    # turns are its speaker_diarization Annotation.
     turns = [
         {
             "speaker": str(label),
             "start": min(max(float(segment.start), 0.0), duration),
             "end": min(max(float(segment.end), 0.0), duration),
         }
-        for segment, _, label in diarization.itertracks(yield_label=True)
+        for segment, _, label in output.speaker_diarization.itertracks(yield_label=True)
     ]
     turns = [t for t in turns if t["end"] > t["start"]]
 
