@@ -47,13 +47,22 @@ pub fn origin_id(input: &Input) -> Result<String> {
                     String::from_utf8_lossy(&out.stderr).trim()
                 );
             }
-            let id = String::from_utf8(out.stdout)?.trim().to_lowercase();
-            if id.is_empty() || !id.contains(':') {
-                bail!("yt-dlp probe returned no extractor:id for {url}");
-            }
-            Ok(format!("ytdlp:{id}"))
+            url_origin_id(&String::from_utf8(out.stdout)?)
+                .with_context(|| format!("yt-dlp probe returned no extractor:id for {url}"))
         }
     }
+}
+
+/// Normalize a yt-dlp `%(extractor_key)s:%(id)s` probe line: the extractor
+/// key is case-insensitive branding ("Youtube") and is lowercased; the
+/// video id is kept verbatim — YouTube ids are case-sensitive, so two
+/// videos may legitimately differ only by id case.
+fn url_origin_id(probe: &str) -> Result<String> {
+    let (extractor, id) = probe.trim().split_once(':').context("missing ':'")?;
+    if extractor.is_empty() || id.is_empty() {
+        bail!("empty extractor or id");
+    }
+    Ok(format!("ytdlp:{}:{id}", extractor.to_lowercase()))
 }
 
 /// Filesystem-safe directory name for a workdir key.
@@ -132,4 +141,25 @@ pub fn fetch_original(input: &Input, workdir: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn url_origin_id_lowercases_extractor_and_preserves_id_case() {
+        assert_eq!(
+            url_origin_id("Youtube:jNQXAC9IVRw\n").unwrap(),
+            "ytdlp:youtube:jNQXAC9IVRw"
+        );
+    }
+
+    #[test]
+    fn url_origin_id_rejects_malformed_probe_output() {
+        assert!(url_origin_id("").is_err());
+        assert!(url_origin_id("no-colon-here").is_err());
+        assert!(url_origin_id(":id-only").is_err());
+        assert!(url_origin_id("Youtube:").is_err());
+    }
 }

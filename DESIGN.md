@@ -22,7 +22,7 @@ Audio and video are decoupled as first-class: a mix routinely takes the audio of
 
 Two identifiers with distinct jobs (never conflated):
 
-- **`origin_id`** (UNIQUE) — the *pre-download idempotency key*: for URLs, the normalized yt-dlp extractor + video id; for local files, SHA-256 of the original file. Checked before any bytes move; ingest of a known origin_id is a no-op without `--force`. Also keys the ingest work dir, so it exists from the first byte of a download. (Hashing downloaded bytes can't provide idempotency — a re-download of the same video yields different bytes.)
+- **`origin_id`** (UNIQUE) — the *pre-download idempotency key*: for URLs, the normalized yt-dlp extractor + video id (extractor key lowercased, video id verbatim — YouTube ids are case-sensitive); for local files, SHA-256 of the original file. Checked before any bytes move; ingest of a known origin_id is a no-op without `--force`. Also keys the ingest work dir, so it exists from the first byte of a download. (Hashing downloaded bytes can't provide idempotency — a re-download of the same video yields different bytes.)
 - **`master_hash`** — SHA-256 of the playback master, computed exactly once when the master is created, never recomputed. Serves local relink (rehash candidate files when paths moved) and edit-file integrity on the same machine. Cross-machine it never matches (masters are local re-encodes), so cross-machine rebind uses origin_id.
 
 ### Timebase: the playback master
