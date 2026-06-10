@@ -68,6 +68,8 @@ Test pure logic (span math, EDL compilation, schema queries against in-memory SQ
 
 One-line imperative summaries, sentence case, no type prefixes: "Add diphone index table", not "feat: added diphone index table".
 
+This is a personal product: commit and push directly to main. The global PR workflow (draft PRs, size budgets, stacking, `/split`) does not apply here.
+
 ## Platform Notes (Apple Silicon, M4 Max)
 
 - arm64; Homebrew at `/opt/homebrew`
