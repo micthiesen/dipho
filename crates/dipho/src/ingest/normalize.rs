@@ -25,6 +25,16 @@ const MAX_TIMESTAMP_ERROR: f64 = 0.010;
 const AUDIO_CHAIN: &str = "aresample=async=1:first_pts=0,asplit=2[am][ana];\
                            [ana]aresample=16000,aformat=sample_fmts=s16:channel_layouts=mono[wav]";
 
+/// FLAC frame size for the master's audio, in samples. mpv never starts
+/// audio mid-packet after a seek or at an EDL segment boundary — it snaps
+/// forward to the next packet — so the packet duration bounds every cut's
+/// audio precision (measured against mpv 0.41 during the M5 preview gate;
+/// the encoder default of 4608 samples ≈ 104 ms ate whole phones per cut).
+/// 576 samples is ~13 ms at 44.1 kHz / 12 ms at 48 kHz: under one video
+/// frame at any common rate, keeping cuts within the documented ≤ 1 frame
+/// preview tolerance.
+const FLAC_FRAME_SIZE: &str = "576";
+
 /// The normalize stage's record (`normalize.json` in the workdir):
 /// `master_hash` is computed exactly once when the master is created, never
 /// recomputed; fps/has_video/start_offsets ride along for resume.
@@ -63,8 +73,15 @@ pub fn create_master(workdir: &Path) -> Result<MasterInfo> {
             .arg(format!("[0:a]{AUDIO_CHAIN}"));
         cmd.args(["-map", "[am]"]);
     }
-    cmd.args(["-c:a", "flac", "-f", "matroska"])
-        .arg(&master_tmp);
+    cmd.args([
+        "-c:a",
+        "flac",
+        "-frame_size",
+        FLAC_FRAME_SIZE,
+        "-f",
+        "matroska",
+    ])
+    .arg(&master_tmp);
     cmd.args(["-map", "[wav]", "-c:a", "pcm_s16le", "-f", "wav"])
         .arg(&wav_tmp);
 
