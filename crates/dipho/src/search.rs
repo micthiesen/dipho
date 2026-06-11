@@ -41,8 +41,8 @@ pub fn run(query: &str, corpus_db: &Path) -> Result<()> {
         println!();
         println!(
             "source {} ({})  {:.2}–{:.2}s  {}{}  conf {}",
-            hit.source_id.0,
-            hit.origin,
+            hit.source.id.0,
+            hit.source.origin,
             hit.t_start,
             hit.t_end,
             hit.speaker.as_deref().unwrap_or("(unknown speaker)"),

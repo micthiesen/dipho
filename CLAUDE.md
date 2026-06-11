@@ -13,7 +13,8 @@ cargo build                     # Build the workspace
 cargo test                      # Run all tests
 cargo clippy -- -D warnings     # Lint (warnings are errors)
 cargo fmt                       # Format code
-cargo run -p dipho              # Run the TUI (search + mpv audition)
+cargo run -p dipho              # Run the TUI (search + audition + EDL editing/preview;
+                                #   --edit overrides ./edit.json)
 cargo run -p dipho -- ingest <url|file>   # Build the corpus (--corpus overrides ./.dipho/corpus.db)
 cargo run -p dipho -- search "twenty five"  # Word/phrase search, exact word spans
 
@@ -39,7 +40,8 @@ crates/
 │       ├── span.rs      # Span references: (source_id, t_start, t_end, channel)
 │       ├── corpus/      # SQLite index (rusqlite bundled): schema, loader, FTS5
 │       │                #   search + query normalization (num2words port)
-│       ├── edl.rs       # EDL-as-data: types + compile to mpv EDL / ffmpeg
+│       ├── edl/         # EDL-as-data: types, validation + shared elision pre-pass
+│       │                #   (plan_preview), mpv EDL compiler, rebind precedence
 │       └── dsp.rs       # Cut refinement (zero-crossing snap, spectral flux) — stub
 ├── dipho/               # Binary: clap CLI + ratatui TUI shell
 │   └── src/
@@ -47,7 +49,8 @@ crates/
 │       ├── ingest/      # Staged ingest driver: origin/idempotency, master+wav, sidecar
 │       ├── search.rs    # `dipho search` CLI
 │       ├── tui/         # Elm-style event loop: app, event, db (reader thread),
-│       │                #   player (mpv audition actor), ui
+│       │                #   edit (EDL session: undo/autosave/save), player
+│       │                #   (mpv audition + preview actor), ui
 │       └── mpv.rs       # mpv JSON IPC client + slave lifecycle (spawn, probe)
 python/                  # uv project: ingest sidecar (WhisperX + pyannote planned)
 docs/                    # DESIGN.md is canonical; research reports in docs/research/

@@ -132,6 +132,26 @@ impl Corpus {
         search::search(&self.conn, query)
     }
 
+    /// Every source in the corpus, as the edit-rebind / source-map input.
+    pub fn sources(&self) -> Result<Vec<crate::edl::CorpusSource>, CorpusError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, origin, origin_id, master_path, master_hash, duration, fps
+             FROM sources ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(crate::edl::CorpusSource {
+                id: crate::span::SourceId(row.get(0)?),
+                origin: row.get(1)?,
+                origin_id: row.get(2)?,
+                master_path: row.get(3)?,
+                master_hash: row.get(4)?,
+                duration: row.get(5)?,
+                fps: row.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
     /// Source id for an origin_id, if it was ingested before. The
     /// pre-download idempotency check: ingest of a known origin_id is a
     /// no-op without `--force`.

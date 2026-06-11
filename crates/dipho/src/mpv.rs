@@ -585,5 +585,215 @@ mod tests {
             );
             let _ = fs::remove_dir_all(dir.path());
         }
+
+        /// The M5 preview gate (ROADMAP): 100 × 200 ms EDL segments play
+        /// without frame drops or audio gaps. Two passes over the same
+        /// compiler-built EDL: an untimed `--ao=pcm` dump asserts how much
+        /// audio mpv actually cuts per boundary (it snaps each segment's
+        /// audio start forward to the next packet/frame boundary — this
+        /// pass caught FLAC's 104 ms default frame size), then a realtime
+        /// playback (a window opens) asserts mpv's drop counters and that
+        /// the wall clock matches the dumped audio (a stall or gap would
+        /// stretch it). Set `DIPHO_GATE_MASTER=<path>` to run against a
+        /// real corpus master instead of the tiny synthetic fixture.
+        #[tokio::test]
+        #[ignore = "spawns mpv and ffmpeg, opens a window (M5 preview gate)"]
+        async fn preview_gate_100_segments_play_gaplessly() {
+            use dipho_core::edl::{Clip, Edl, SourceInfo, compile_mpv_edl};
+            use dipho_core::span::{Channel, SourceId, Span};
+
+            let dir = tempfile::tempdir().unwrap();
+            let master = match std::env::var("DIPHO_GATE_MASTER") {
+                Ok(path) => PathBuf::from(path),
+                Err(_) => master_with_beep(dir.path(), fixtures::offset_source).0,
+            };
+
+            // Probe the master's duration through mpv itself.
+            let (slave, mut events) = spawn_slave(&[]).await.unwrap();
+            probe_version(&slave.client).await.unwrap();
+            slave
+                .client
+                .set_property("pause", json!(true))
+                .await
+                .unwrap();
+            slave
+                .client
+                .command(json!(["loadfile", master.to_str().unwrap(), "replace"]))
+                .await
+                .unwrap();
+            wait_for(&mut events, |e| matches!(e, MpvEvent::FileLoaded)).await;
+            let duration = slave
+                .client
+                .get_property("duration")
+                .await
+                .unwrap()
+                .as_f64()
+                .unwrap();
+            let fps = slave
+                .client
+                .get_property("container-fps")
+                .await
+                .ok()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(30.0);
+
+            // 100 × 200 ms clips scattered through the master with a
+            // golden-ratio stride, so no two are source-contiguous (the
+            // compiler must emit all 100 segments — assert it).
+            const N: usize = 100;
+            const SLICE: f64 = 0.2;
+            let source = SourceId(1);
+            let clips: Vec<Clip> = (0..N)
+                .map(|i| {
+                    let t_start = (i as f64 * 0.618_034 * duration) % (duration - SLICE);
+                    Clip {
+                        span: Span {
+                            source,
+                            t_start,
+                            t_end: t_start + SLICE,
+                            channel: Channel::Both,
+                        },
+                        transforms: vec![],
+                        provenance: None,
+                        label: Some(format!("seg{i}")),
+                    }
+                })
+                .collect();
+            let edl = Edl {
+                clips,
+                sources: Default::default(),
+            };
+            let mut sources = dipho_core::edl::SourceMap::new();
+            sources.insert(
+                source,
+                SourceInfo {
+                    master_path: master.clone(),
+                    duration,
+                    fps: None,
+                },
+            );
+            let compiled = compile_mpv_edl(&edl, &sources).unwrap();
+            let plan = dipho_core::edl::plan_preview(&edl, &sources).unwrap();
+            assert_eq!(
+                plan.segments.len(),
+                N,
+                "a contiguity accident elided segments"
+            );
+            let timeline = plan.total_duration;
+            drop(slave);
+            drop(events);
+
+            // Pass 1: untimed audio dump. mpv quantizes each segment's
+            // audio start forward (≤ one video frame by DESIGN's preview
+            // tolerance, now that master FLAC frames are smaller than a
+            // frame), so the dump may run short by at most that per cut.
+            let dump = dir.path().join("gate-dump.wav");
+            let extra: Vec<String> = [
+                "--vo=null",
+                "--untimed",
+                "--ao=pcm",
+                &format!("--ao-pcm-file={}", dump.display()),
+                "--audio-format=s16",
+                "--audio-samplerate=16000",
+                "--audio-channels=mono",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+            let (dumper, mut dump_events) = spawn_slave(&extra).await.unwrap();
+            dumper
+                .client
+                .observe_property(1, "eof-reached")
+                .await
+                .unwrap();
+            dumper
+                .client
+                .command(json!(["loadfile", compiled.uri(), "replace"]))
+                .await
+                .unwrap();
+            let eof = wait_for(
+                &mut dump_events,
+                |e| matches!(e, MpvEvent::PropertyChange { id: 1, data } if data == &json!(true)),
+            )
+            .await;
+            assert!(!matches!(eof, MpvEvent::Disconnected), "dump mpv died");
+            drop(dumper);
+            drop(dump_events);
+            let audio = wav_duration(&dump);
+            let cut_budget = N as f64 / fps;
+            assert!(
+                audio >= timeline - cut_budget && audio <= timeline + 0.1,
+                "EDL audio {audio:.2} s vs timeline {timeline:.2} s —                  cuts lose more than a frame each (budget {cut_budget:.2} s)"
+            );
+
+            // Pass 2: realtime playback, default vo/ao.
+            let (slave, mut events) = spawn_slave(&[]).await.unwrap();
+            slave
+                .client
+                .observe_property(1, "eof-reached")
+                .await
+                .unwrap();
+            slave
+                .client
+                .command(json!(["loadfile", compiled.uri(), "replace"]))
+                .await
+                .unwrap();
+            wait_for(&mut events, |e| matches!(e, MpvEvent::FileLoaded)).await;
+            slave
+                .client
+                .set_property("pause", json!(false))
+                .await
+                .unwrap();
+            wait_for(&mut events, |e| matches!(e, MpvEvent::PlaybackRestart)).await;
+            let started = Instant::now();
+            let eof = wait_for(
+                &mut events,
+                |e| matches!(e, MpvEvent::PropertyChange { id: 1, data } if data == &json!(true)),
+            )
+            .await;
+            assert!(!matches!(eof, MpvEvent::Disconnected), "mpv died");
+            let wall = started.elapsed().as_secs_f64();
+
+            let counter = |name: &str| {
+                let client = &slave.client;
+                let name = name.to_string();
+                async move {
+                    client
+                        .get_property(&name)
+                        .await
+                        .ok()
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
+                }
+            };
+            let vo_drops = counter("frame-drop-count").await;
+            let decoder_drops = counter("decoder-frame-drop-count").await;
+            println!(
+                "preview gate on {}: timeline {timeline:.2} s, EDL audio {audio:.2} s, \
+                 wall {wall:.2} s, vo drops {vo_drops}, decoder drops {decoder_drops}",
+                master.display()
+            );
+            assert_eq!(vo_drops, 0, "vo dropped frames");
+            assert_eq!(decoder_drops, 0, "decoder dropped frames");
+            // Gapless pacing: realtime playback takes exactly as long as
+            // the audio mpv decodes for this EDL — a stall, underrun, or
+            // skipped segment shows up as a mismatch. The slack absorbs
+            // EOF signalling and ao drain.
+            assert!(
+                (wall - audio).abs() < 1.0,
+                "wall {wall:.2} s vs EDL audio {audio:.2} s — playback stalled or skipped"
+            );
+        }
+
+        /// Duration of a 16 kHz mono s16le wav, from its data chunk.
+        fn wav_duration(wav: &Path) -> f64 {
+            let bytes = fs::read(wav).unwrap();
+            let data_start = bytes
+                .windows(4)
+                .position(|w| w == b"data")
+                .expect("wav data chunk")
+                + 8;
+            (bytes.len() - data_start) as f64 / 2.0 / 16_000.0
+        }
     }
 }

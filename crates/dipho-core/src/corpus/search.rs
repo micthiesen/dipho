@@ -6,6 +6,7 @@ use rusqlite::{Connection, params};
 
 use super::CorpusError;
 use super::normalize::normalize_query;
+use crate::edl::CorpusSource;
 use crate::span::SourceId;
 
 /// One utterance matching the query, with its full token stream and the
@@ -13,11 +14,9 @@ use crate::span::SourceId;
 #[derive(Debug, Clone)]
 pub struct SearchHit {
     pub utterance_id: i64,
-    pub source_id: SourceId,
-    /// The source's origin (URL or path), for display.
-    pub origin: String,
-    /// The source's playback master, for audition.
-    pub master_path: String,
+    /// The full source row: origin and master path for display/audition,
+    /// plus everything an edit append needs (manifest entry + source map).
+    pub source: CorpusSource,
     pub t_start: f64,
     pub t_end: f64,
     /// Raw ASR text, for display.
@@ -63,7 +62,8 @@ pub fn search(conn: &Connection, query: &str) -> Result<Vec<SearchHit>, CorpusEr
     let mut stmt = conn.prepare(
         "SELECT u.id, u.source_id, src.origin, src.master_path,
                 u.t_start, u.t_end, u.text,
-                coalesce(s.name, s.label), u.multi_speaker, u.confidence
+                coalesce(s.name, s.label), u.multi_speaker, u.confidence,
+                src.origin_id, src.master_hash, src.duration, src.fps
          FROM utterances_fts f
          JOIN utterances u ON u.id = f.rowid
          JOIN sources src ON src.id = u.source_id
@@ -97,9 +97,15 @@ pub fn search(conn: &Connection, query: &str) -> Result<Vec<SearchHit>, CorpusEr
         }
         hits.push(SearchHit {
             utterance_id,
-            source_id: SourceId(row.get(1)?),
-            origin: row.get(2)?,
-            master_path: row.get(3)?,
+            source: CorpusSource {
+                id: SourceId(row.get(1)?),
+                origin: row.get(2)?,
+                master_path: row.get(3)?,
+                origin_id: row.get(10)?,
+                master_hash: row.get(11)?,
+                duration: row.get(12)?,
+                fps: row.get(13)?,
+            },
             t_start: row.get(4)?,
             t_end: row.get(5)?,
             text: row.get(6)?,
@@ -275,7 +281,11 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].speaker.as_deref(), Some("SPEAKER_00"));
         assert_eq!(hits[0].confidence, Some(0.9));
-        assert_eq!(hits[0].master_path, "master.mkv");
+        assert_eq!(hits[0].source.master_path, "master.mkv");
+        assert_eq!(hits[0].source.origin_id, "youtube:srcA");
+        assert_eq!(hits[0].source.master_hash, "youtube:srcA");
+        assert_eq!(hits[0].source.fps, Some(30.0));
+        assert!((hits[0].source.duration - 10.0).abs() < 1e-9);
         // Source B has no turns: no speaker; null confidence passes through.
         let hits = run(&corpus, "again");
         assert_eq!(hits[0].speaker, None);

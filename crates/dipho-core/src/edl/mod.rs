@@ -6,12 +6,20 @@
 //! render plan. See DESIGN.md for compilation semantics (verbatim order,
 //! mandatory shared-pre-pass join elision, audio-master frame quantization).
 
+mod compile;
+mod rebind;
+
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::span::{Channel, SourceId, Span};
+
+pub use compile::{
+    JOIN_ELISION_EPS, MpvEdl, PlannedSegment, PreviewPlan, compile_mpv_edl, plan_preview,
+};
+pub use rebind::{CorpusSource, REBIND_DURATION_TOLERANCE, Rebind, RebindError, rebind};
 
 /// A transform applied to a clip. See the transform-semantics table in
 /// DESIGN.md: Loop/Stutter preview natively in mpv EDL; Reverse/Pitch/Speed
@@ -27,7 +35,7 @@ pub enum Transform {
     /// Audio-only, duration-preserving; video untouched. Semitones in [-24, 24].
     Pitch { semitones: f32 },
     /// A+V time-scale, pitch-preserving. Factor in [0.25, 4.0].
-    Speed { factor: f32 },
+    Speed { factor: f64 },
     /// First `slice` seconds repeated `repeats` times, then the full clip
     /// once. repeats >= 1, 0 < slice <= clip length.
     Stutter { repeats: u32, slice: f64 },
@@ -52,6 +60,10 @@ pub struct Clip {
     pub transforms: Vec<Transform>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provenance: Option<ProvenanceRef>,
+    /// Display label (the matched phrase at append time): the EDL segment
+    /// `title=`, giving free chapter-per-cut navigation in mpv.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// Entry in the edit file's mandatory sources manifest. Rebind precedence:
@@ -75,13 +87,35 @@ pub struct Edl {
     pub sources: BTreeMap<SourceId, SourceRef>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum EdlLoadError {
+    #[error("malformed edit file: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("clip {clip_index} references source {source_id:?} missing from the sources manifest")]
+    MissingManifestEntry {
+        clip_index: usize,
+        source_id: SourceId,
+    },
+}
+
 impl Edl {
     pub fn to_json(&self) -> serde_json::Result<String> {
         serde_json::to_string_pretty(self)
     }
 
-    pub fn from_json(json: &str) -> serde_json::Result<Self> {
-        serde_json::from_str(json)
+    /// Parse an edit file, rejecting any edit whose mandatory sources
+    /// manifest doesn't cover every referenced source.
+    pub fn from_json(json: &str) -> Result<Self, EdlLoadError> {
+        let edl: Edl = serde_json::from_str(json)?;
+        for (clip_index, clip) in edl.clips.iter().enumerate() {
+            if !edl.sources.contains_key(&clip.span.source) {
+                return Err(EdlLoadError::MissingManifestEntry {
+                    clip_index,
+                    source_id: clip.span.source,
+                });
+            }
+        }
+        Ok(edl)
     }
 }
 
@@ -91,7 +125,10 @@ impl Edl {
 pub struct SourceInfo {
     pub master_path: PathBuf,
     pub duration: f64,
-    pub fps: f64,
+    /// Post-normalization CFR rate; None for audio-only sources. The mpv
+    /// preview compiler never needs it; ffmpeg frame quantization (M6)
+    /// requires it for any video-bearing clip.
+    pub fps: Option<f64>,
 }
 
 pub type SourceMap = HashMap<SourceId, SourceInfo>;
@@ -119,13 +156,6 @@ pub struct FfmpegPlan {
     pub invocations: Vec<Vec<String>>,
 }
 
-/// Compile an edit to an mpv EDL playlist string for zero-render preview.
-/// Clips compile verbatim, in edit order; join elision is mandatory and
-/// shared with compile_ffmpeg. Milestone: flat EDL preview.
-pub fn compile_mpv_edl(_edl: &Edl, _sources: &SourceMap) -> Result<String, EdlCompileError> {
-    todo!("compile to mpv EDL (milestone: flat EDL preview)")
-}
-
 /// Compile an edit to the two-stage ffmpeg render plan, including the
 /// audio-master frame-quantization planning pass. Milestone: render.
 pub fn compile_ffmpeg(_edl: &Edl, _sources: &SourceMap) -> Result<FfmpegPlan, EdlCompileError> {
@@ -137,47 +167,70 @@ mod tests {
     use super::*;
     use crate::span::{Channel, SourceId, Span};
 
+    fn span(source: i64, t_start: f64, t_end: f64) -> Span {
+        Span {
+            source: SourceId(source),
+            t_start,
+            t_end,
+            channel: Channel::Both,
+        }
+    }
+
+    fn source_ref(name: &str) -> SourceRef {
+        SourceRef {
+            origin: format!("https://example.com/watch?v={name}"),
+            origin_id: format!("youtube:{name}"),
+            master_filename: format!("{name}.mkv"),
+            duration: 1234.5,
+            master_hash: format!("hash-{name}"),
+        }
+    }
+
     #[test]
     fn edl_json_round_trip() {
         let edl = Edl {
             clips: vec![
                 Clip {
-                    span: Span {
-                        source: SourceId(1),
-                        t_start: 12.0,
-                        t_end: 12.8,
-                        channel: Channel::Both,
-                    },
+                    span: span(1, 12.0, 12.8),
                     transforms: vec![Transform::Stutter {
                         repeats: 3,
                         slice: 0.06,
                     }],
                     provenance: Some(ProvenanceRef::Word(42)),
+                    label: Some("hello".into()),
                 },
                 Clip {
-                    span: Span {
-                        source: SourceId(1),
-                        t_start: 0.5,
-                        t_end: 1.0,
-                        channel: Channel::Both,
-                    },
+                    span: span(1, 0.5, 1.0),
                     transforms: vec![],
                     provenance: None,
+                    label: None,
                 },
             ],
-            sources: BTreeMap::from([(
-                SourceId(1),
-                SourceRef {
-                    origin: "https://example.com/watch?v=abc123".into(),
-                    origin_id: "youtube:abc123".into(),
-                    master_filename: "abc123.mkv".into(),
-                    duration: 1234.5,
-                    master_hash: "deadbeef".into(),
-                },
-            )]),
+            sources: BTreeMap::from([(SourceId(1), source_ref("abc123"))]),
         };
         let json = edl.to_json().unwrap();
         let back = Edl::from_json(&json).unwrap();
         assert_eq!(edl, back);
+    }
+
+    #[test]
+    fn load_rejects_a_clip_without_a_manifest_entry() {
+        let edl = Edl {
+            clips: vec![Clip {
+                span: span(7, 0.0, 1.0),
+                transforms: vec![],
+                provenance: None,
+                label: None,
+            }],
+            sources: BTreeMap::from([(SourceId(1), source_ref("abc123"))]),
+        };
+        let json = edl.to_json().unwrap();
+        match Edl::from_json(&json) {
+            Err(EdlLoadError::MissingManifestEntry {
+                clip_index: 0,
+                source_id: SourceId(7),
+            }) => {}
+            other => panic!("expected MissingManifestEntry, got {other:?}"),
+        }
     }
 }

@@ -17,6 +17,11 @@ struct Cli {
     #[arg(long, global = true, default_value = ".dipho/corpus.db")]
     corpus: std::path::PathBuf,
 
+    /// Edit file the TUI works on (created on first save; recovered from
+    /// its .autosave if a session ended without saving)
+    #[arg(long, default_value = "edit.json")]
+    edit: std::path::PathBuf,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -42,7 +47,7 @@ enum Command {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        None => tui::run(cli.corpus),
+        None => tui::run(cli.corpus, cli.edit),
         Some(Command::Ingest { input, force }) => ingest::run(
             &input,
             &ingest::Options {

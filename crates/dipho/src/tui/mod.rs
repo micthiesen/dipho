@@ -4,6 +4,7 @@
 
 mod app;
 mod db;
+mod edit;
 mod event;
 mod player;
 mod ui;
@@ -16,16 +17,28 @@ use futures_util::StreamExt;
 use tokio::sync::mpsc;
 
 use app::App;
+use edit::EditSession;
 use event::Event;
 
-pub fn run(corpus_db: PathBuf) -> Result<()> {
+pub fn run(corpus_db: PathBuf, edit_path: PathBuf) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(run_app(corpus_db))
+    runtime.block_on(run_app(corpus_db, edit_path))
 }
 
-async fn run_app(corpus_db: PathBuf) -> Result<()> {
+async fn run_app(corpus_db: PathBuf, edit_path: PathBuf) -> Result<()> {
+    // Load and rebind the edit before touching the terminal, so a load
+    // failure (e.g. an unresolved source: ingest it, then reopen) prints
+    // as a plain CLI error instead of corrupting the session.
+    let corpus_sources = match crate::search::open_corpus(&corpus_db) {
+        Ok(corpus) => corpus.sources()?,
+        // No corpus yet: the TUI still opens (the status line explains),
+        // and an empty source list only fails edits that reference one.
+        Err(_) => Vec::new(),
+    };
+    let (edit, rebind_warnings) = EditSession::open(edit_path, &corpus_sources)?;
+
     // Raw mode before any producer starts, so no input is ever read
     // line-buffered.
     let mut terminal = ratatui::init();
@@ -44,6 +57,8 @@ async fn run_app(corpus_db: PathBuf) -> Result<()> {
         corpus_db.clone(),
         db::spawn(&corpus_db, tx.clone()),
         player::spawn(tx.clone()),
+        edit,
+        rebind_warnings,
     );
 
     let result = event_loop(&mut terminal, &mut app, &mut rx).await;

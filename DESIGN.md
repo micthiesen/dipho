@@ -29,7 +29,7 @@ Two identifiers with distinct jobs (never conflated):
 
 There is exactly one clock. At ingest, every source is normalized into a local immutable **playback master**, and the analysis wav is extracted **in the same ffmpeg invocation** so both share one audio stream by construction:
 
-- **Audio**: one shared filter chain `aresample=async=1:first_pts=0` (fills timestamp gaps with silence, trims overlaps — the stream is contiguous from 0 as an *invariant*, not an assumption) feeds both the FLAC encode (master) and the 16 kHz mono pcm_s16le wav (analysis). Corpus timestamps are defined as *seconds in this contiguous audio stream*.
+- **Audio**: one shared filter chain `aresample=async=1:first_pts=0` (fills timestamp gaps with silence, trims overlaps — the stream is contiguous from 0 as an *invariant*, not an assumption) feeds both the FLAC encode (master) and the 16 kHz mono pcm_s16le wav (analysis). Corpus timestamps are defined as *seconds in this contiguous audio stream*. The FLAC is encoded with `-frame_size 576` (~13 ms): mpv never starts audio mid-packet after a seek or at an EDL segment boundary — it snaps forward to the next packet — so the packet duration bounds every cut's audio precision in both audition and preview (measured against mpv 0.41 in the M5 gate; the encoder default of 4608 samples ≈ 104 ms ate whole phones per cut). 576 samples keeps the snap under one video frame at any common rate, i.e. inside the preview's documented ≤ 1 frame tolerance; the render path is unaffected (ffmpeg decodes, sample-exact).
 - **Video**: rotation baked in (decode with autorotation, strip side-data), square pixels, CFR forced via the `fps` filter at the source's average frame rate rounded to the nearest standard rate — that fps is recorded in `sources` and is what frame quantization and the compilers read. Codec: libx264 all-intra, `-g 1 -crf 14 -preset fast -pix_fmt yuv420p` — visually lossless for downstream re-encoding and frame-exact seekable. Honest cost: ~15–25 GB per hour of 1080p30; accepted (masters are per-project and prunable).
 - **Audio-only sources** are first-class: FLAC-only MKV master, `sources.has_video = 0`; their spans are `Channel::Audio` and the MVP compilers reject them with the existing typed error until channel lanes land.
 
@@ -144,9 +144,15 @@ A **program, not a timeline**. Non-destructive EDL-as-data: an ordered list of c
 Both compilers are pure functions in `dipho-core::edl` over a resolver, keeping the core I/O-free:
 
 ```rust
-compile_mpv_edl(&Edl, &SourceMap) -> Result<String, EdlCompileError>
-compile_ffmpeg(&Edl, &SourceMap) -> Result<FfmpegPlan, EdlCompileError>
-// SourceMap: source_id -> { master_path, duration, fps }  (from the corpus, by the caller)
+plan_preview(&Edl, &SourceMap)    -> Result<PreviewPlan, EdlCompileError>  // the shared pre-pass
+compile_mpv_edl(&Edl, &SourceMap) -> Result<MpvEdl, EdlCompileError>       // = MpvEdl::from_plan(plan)
+compile_ffmpeg(&Edl, &SourceMap)  -> Result<FfmpegPlan, EdlCompileError>
+// SourceMap: source_id -> { master_path, duration, fps: Option<f64> }  (from the corpus, by the
+//   caller; fps is None for audio-only sources — the mpv compiler never needs it, M6 frame
+//   quantization requires it for video-bearing clips)
+// PreviewPlan: validated, elided, transform-expanded segments + per-clip output intervals and
+//   total duration — the output-time geometry the TUI uses for seeks, replay windows, clamping
+// MpvEdl: .document() for `.mpv.edl` export, .uri() for the `edl://` preview reload — one compiler
 // FfmpegPlan: ordered list of complete ffmpeg invocations (two-stage render)
 ```
 
@@ -161,7 +167,7 @@ compile_ffmpeg(&Edl, &SourceMap) -> Result<FfmpegPlan, EdlCompileError>
 
 Spawn once: `mpv --idle=yes --keep-open=yes --no-terminal --input-ipc-server=<socket>`, where the socket lives in a fresh per-process 0700 temp directory (short path — macOS `sun_path` ~104 bytes; private because IPC exposes `run`), removed when the slave is dropped. One persistent JSON IPC connection per session (closing drops `observe_property`). Correlate by `request_id`, never message order; `playback-restart` = seek-done. Audition = exact seek + `ab-loop-a`/`ab-loop-b` (clear with `"no"`).
 
-**Player modes.** `PlayerMode { Audition(hit), Preview(output_pos) }`. Audition keys: loop-exact, play-with-context (±500 ms, no loop), play-full-utterance. In Preview, dipho owns compiled segment durations, so on recompile it computes current output-time, reloads, seeks back (clamped if the edit changed under the playhead), clearing ab-loops.
+**Player modes.** `PlayerMode { Audition(hit), Preview(output_pos) }`. Audition keys: loop-exact, play-with-context (±500 ms, no loop), play-full-utterance. In Preview, a recompile reloads the new `edl://` URI and seeks back to the prior output position (mpv's `time-pos` *is* EDL output time, so the player actor reads position and pause state back with request round trips — deterministic, no racing the property stream), clamped to the new total duration if the edit shrank under the playhead, clearing ab-loops. A trim/nudge instead replays a ±500 ms window around the edited clip's output interval — the neighborhood replay that makes the new cut audible immediately.
 
 ## The Solver (post-MVP)
 
@@ -210,7 +216,7 @@ Post-MVP, rough order: transforms → waveform widget → diphone assembly searc
 - **mpv EDL v0 unfrozen** — version probe, single serializer, golden tests
 - **MFA conda-only** — arm64-on-M4 verified 2026-06-10 (micromamba + conda-forge MFA 3.3.9: align + g2p both work; ~30 s startup overhead per `mfa align` run). Subprocess boundary keeps it swappable. Sole aligner: if it degrades on real footage, reassess openly, never silently.
 - **Master disk cost** (~15–25 GB/hour 1080p30 all-intra) — accepted for seek quality; masters are per-project and prunable; revisit codec only with measurements in hand
-- **Hundred-segment sub-second EDL preview unproven** — all-intra master is the mitigation; M5 gate: 100 × 200 ms segments play without drops/gaps (mpv stats)
+- ~~**Hundred-segment sub-second EDL preview unproven**~~ — closed in M5: 100 × 200 ms segments on the real 1080p30 all-intra master play with zero vo/decoder drops, wall clock matching the timeline within 200 ms. The gate also exposed that mpv snaps each segment's audio start forward to the next audio packet — fixed by encoding master FLAC with `-frame_size 576` (timebase section); masters ingested before that change need re-ingest for clean cuts
 - **mpv audition latency** — measured in M4 (M4 Max, real 1080p30 all-intra master, paused exact seeks): ~20 ms median seek → `playback-restart` round trip; no rodio path needed
 - **pyannote HF-gated** — token + license is a hard documented setup step
 - **Dependency rot killed the prior art** — yt-dlp unpinned, subprocess boundaries, staged re-runnable ingest, tools+parameters provenance per run
@@ -229,7 +235,7 @@ Deferred from the M1 review (do when their milestone lands, not before):
 
 - Loader hot-loop costs (terminator insertion and per-unit speaker assignment are O(units × turns/boundaries); frame/feature blobs are encoded with a per-element copy) — fine at fixture scale and dwarfed by the ML stages; optimize only with profiles from a real long-source ingest in hand (M2 only ingested short fixtures)
 - `ingest_runs.started/finished/status` are stamped at load time by the loader. M2 shipped `dipho ingest` without per-stage lifecycle provenance — re-deferred: do it when the TUI ingest job UX lands (`Event::Job` already carries per-stage progress) or alongside `dipho reingest --stale`, whichever comes first
-- EDL `SourceInfo.fps` is non-optional while `sources.fps` is NULL for audio-only sources — reconcile when the binary wires corpus → SourceMap (M5)
+- ~~EDL `SourceInfo.fps` is non-optional while `sources.fps` is NULL for audio-only sources~~ — reconciled in M5: `SourceInfo.fps` is `Option<f64>`; the mpv compiler never reads it, and M6's frame quantization must reject a video-bearing clip whose source lacks fps
 
 Deferred from M2 (recorded 2026-06-10):
 
