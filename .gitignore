@@ -30,3 +30,7 @@ __pycache__/
 
 # Project corpus + ingest workdirs (downloads, masters, stage files)
 .dipho/
+
+# Working edit files (per-project scratch, like the corpus)
+/edit.json
+/edit.json.autosave

@@ -137,7 +137,7 @@ A **program, not a timeline**. Non-destructive EDL-as-data: an ordered list of c
 | `Speed { factor }` | A+V time-scale, pitch-preserving | setpts + chained atempo | render-only, badged |
 | `Reverse` | both streams | reverse + areverse (buffers the clip; fine for short clips) | render-only, badged |
 
-**Validation is reject-never-clamp, at compile time**, with typed errors `InvalidSpan` / `InvalidTransform`: spans need 0 ≤ t_start < t_end ≤ source duration; `Loop.count ≥ 1`; `Stutter.repeats ≥ 1`, `0 < slice ≤ clip length`; `Speed.factor ∈ [0.25, 4.0]`; `Pitch.semitones ∈ [−24, +24]`. Golden error-case tests alongside the compile goldens.
+**Validation is reject-never-clamp, at compile time**, with typed errors `InvalidSpan` / `InvalidTransform`: spans need 0 ≤ t_start < t_end ≤ source duration; `Loop.count ≥ 1`; `Stutter.repeats ≥ 1`, `0 < slice ≤ clip length`; `Speed.factor ∈ [0.25, 4.0]`; `Pitch.semitones ∈ [−24, +24]`. Golden error-case tests alongside the compile goldens. Until the render-only transforms land (post-MVP), `compile_ffmpeg` rejects them with typed `TransformUnsupported` — the render is the reference and never silently plays a transform plain (the preview may, because it badges the clip).
 
 ### Compilation
 
@@ -146,22 +146,26 @@ Both compilers are pure functions in `dipho-core::edl` over a resolver, keeping 
 ```rust
 plan_preview(&Edl, &SourceMap)    -> Result<PreviewPlan, EdlCompileError>  // the shared pre-pass
 compile_mpv_edl(&Edl, &SourceMap) -> Result<MpvEdl, EdlCompileError>       // = MpvEdl::from_plan(plan)
-compile_ffmpeg(&Edl, &SourceMap)  -> Result<FfmpegPlan, EdlCompileError>
+compile_ffmpeg(&Edl, &SourceMap, &RenderSpec) -> Result<FfmpegPlan, EdlCompileError>
 // SourceMap: source_id -> { master_path, duration, fps: Option<f64> }  (from the corpus, by the
-//   caller; fps is None for audio-only sources — the mpv compiler never needs it, M6 frame
-//   quantization requires it for video-bearing clips)
+//   caller; fps is None for audio-only sources — the mpv compiler never needs it, frame
+//   quantization rejects a video-bearing clip whose source lacks it with typed MissingFps)
 // PreviewPlan: validated, elided, transform-expanded segments + per-clip output intervals and
 //   total duration — the output-time geometry the TUI uses for seeks, replay windows, clamping
 // MpvEdl: .document() for `.mpv.edl` export, .uri() for the `edl://` preview reload — one compiler
-// FfmpegPlan: ordered list of complete ffmpeg invocations (two-stage render)
+// RenderSpec: output profile + intermediates dir + output path, resolved by the caller — the
+//   profile's resolution is ffprobed from the masters at render time (the schema stores fps,
+//   not dimensions; masters are square-pixel by construction)
+// FfmpegPlan: complete ffmpeg invocations (stage-1 extractions + stage-2 concat encode) plus
+//   the concat demuxer list the runner writes between the stages
 ```
 
 **Clips compile verbatim, in edit order, never reordered, pad = 0.** (Round 1: "pad-then-merge" would have collapsed stutters and reordered edits — supercut semantics, not sentence-mixing.) **Join elision is mandatory and deterministic, computed once in a shared pre-pass both targets consume** (round 2: "may elide" would let preview and render disagree about the output timeline): consecutive clips sharing (source, channel), **both with empty transform lists**, whose spans are source-contiguous forward (|next.t_start − prev.t_end| ≤ 1.0 ms, one named constant) compile to one segment [prev.t_start, next.t_end]. Repeated identical spans never merge. Context padding exists only in audition playback. Goldens: a repeated span compiles to N segments; both compilers emit the identical output-time boundary list for an elision fixture; two contiguous clips each with `Loop{2}` compile to four segments AABB, never elided.
 
 1. **mpv EDL (preview)** — recompiled to an `edl://` URI on every change, `["loadfile", uri, "replace"]` to the long-lived slave; no temp files. `.mpv.edl` export is the same compiler. Unconditional `%<utf-8-byte-count>%` quoting; named params (`start=`, `length=`); explicit float formatting; per-segment `title=` (word label; mpv's chapter-per-segment gives free cut navigation). EDL v0 is unfrozen → startup version probe (floor ≥ 0.38). Golden-file tests.
-2. **ffmpeg render (export)** — **two-stage**. Stage 1, per clip: accurate seek on the all-intra master and **frame-exact extraction** (below), apply the clip's transform chain, encode to a uniform intermediate: **ProRes 422 HQ + pcm_s24le in .mov** (intra, effectively transparent — the final encode is the only quality-determining step after the master) at the project profile (largest post-normalization display area among edit sources; fps from `sources`; audio 48 kHz stereo; `--size`/`--fps` override). Intermediates live in `./.dipho/render/<edit-hash>/clip-NNN.mov`, deleted on success, kept on failure, with a preflight free-space check. Stage 2: concat demuxer over intermediates → final encode. Never stream-copy cuts. A single-process `filter_complex` path is permitted for small edits only if golden-tested timing-identical.
+2. **ffmpeg render (export)** — **two-stage**. Stage 1, per clip: accurate seek on the all-intra master and **frame-exact extraction** (below), apply the clip's transform chain, encode to a uniform intermediate: **ProRes 422 HQ + pcm_s24le in .mov** (intra, effectively transparent — the final encode is the only quality-determining step after the master) at the project profile (largest post-normalization display area among edit sources; fps from `sources`; audio 48 kHz stereo; `--size`/`--fps` override). Intermediates live in `./.dipho/render/<edit-hash>/clip-NNN.mov`, deleted on success, kept on failure, with a preflight free-space check. Stage 2: concat demuxer over intermediates → final encode (h.264 high `-crf 16` + yuv420p + 256 kbps AAC, `+faststart` for QuickTime containers). Never stream-copy cuts. A single-process `filter_complex` path is permitted for small edits only if golden-tested timing-identical.
 
-**Frame quantization — one algorithm, audio is master.** Audio cuts are sample-accurate and authoritative. One planning pass in `compile_ffmpeg` computes cumulative audio time T_k after each output segment; segment k gets `n_k = round(T_k·fps) − round(T_{k−1}·fps)` video frames (cumulative rounding *is* the error diffusion; |video − audio| ≤ half a frame everywhere, provably), starting at master frame `f_k = floor(t_start·fps + 1e-9)`. Stage 1 selects frames exactly (`-ss` keyframe-exact on the all-intra master, then `trim=end_frame=n_k` — never `trim=start=<seconds>`). mpv preview uses seconds (`length=`) and may differ by ≤ 1 frame per boundary — acceptable, preview ≠ reference. M6 asserts exactly this formula: audio cut positions match the EDL; A/V error < half a frame at every boundary and at the end.
+**Frame quantization — one algorithm, audio is master.** Audio cuts are sample-accurate and authoritative. One planning pass in `compile_ffmpeg` computes cumulative audio time T_k after each output segment; segment k gets `n_k = round(T_k·fps) − round(T_{k−1}·fps)` video frames (cumulative rounding *is* the error diffusion; |video − audio| ≤ half a frame everywhere, provably), starting at master frame `f_k = floor(t_start·fps + 1e-9)`. Stage 1 selects frames exactly (`-ss` keyframe-exact on the all-intra master, then `trim=end_frame=n_k` — never `trim=start=<seconds>`): the video input seeks half a source frame *before* f_k, so ffmpeg's accurate input seek (which discards decoded frames before the requested time) starts at exactly f_k whatever millisecond rounding Matroska applied to the stored timestamps; the audio input seeks a second early and `atrim` cuts sample-exactly in seek-shifted time (the shift is exactly the requested seek, whatever packet the demuxer landed on). A segment shorter than half a frame legitimately gets n_k = 0; an empty-video intermediate concats fine (verified, M6). mpv preview uses seconds (`length=`) and may differ by ≤ 1 frame per boundary — acceptable, preview ≠ reference. M6 asserts exactly this formula: audio cut positions match the EDL; A/V error < half a frame at every boundary and at the end.
 
 ### mpv slave lifecycle
 
@@ -235,7 +239,7 @@ Deferred from the M1 review (do when their milestone lands, not before):
 
 - Loader hot-loop costs (terminator insertion and per-unit speaker assignment are O(units × turns/boundaries); frame/feature blobs are encoded with a per-element copy) — fine at fixture scale and dwarfed by the ML stages; optimize only with profiles from a real long-source ingest in hand (M2 only ingested short fixtures)
 - `ingest_runs.started/finished/status` are stamped at load time by the loader. M2 shipped `dipho ingest` without per-stage lifecycle provenance — re-deferred: do it when the TUI ingest job UX lands (`Event::Job` already carries per-stage progress) or alongside `dipho reingest --stale`, whichever comes first
-- ~~EDL `SourceInfo.fps` is non-optional while `sources.fps` is NULL for audio-only sources~~ — reconciled in M5: `SourceInfo.fps` is `Option<f64>`; the mpv compiler never reads it, and M6's frame quantization must reject a video-bearing clip whose source lacks fps
+- ~~EDL `SourceInfo.fps` is non-optional while `sources.fps` is NULL for audio-only sources~~ — reconciled in M5: `SourceInfo.fps` is `Option<f64>`; the mpv compiler never reads it. Closed in M6: frame quantization rejects a video-bearing clip whose source lacks fps with typed `MissingFps`
 
 Deferred from M2 (recorded 2026-06-10):
 

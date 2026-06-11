@@ -6,7 +6,7 @@
 
 pub(crate) mod normalize;
 mod origin;
-mod probe;
+pub(crate) mod probe;
 mod sidecar;
 
 use std::fs;

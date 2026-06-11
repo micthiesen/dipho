@@ -1,9 +1,9 @@
 mod ingest;
 mod mpv;
+mod render;
 mod search;
 mod tui;
 
-use anyhow::bail;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -41,7 +41,27 @@ enum Command {
     Render {
         edit: std::path::PathBuf,
         output: std::path::PathBuf,
+        /// Output resolution, e.g. 1920x1080 (default: the largest
+        /// source's)
+        #[arg(long, value_parser = parse_size)]
+        size: Option<(u32, u32)>,
+        /// Output frame rate (default: the largest source's)
+        #[arg(long)]
+        fps: Option<f64>,
+        /// Persist an origin_id-only rebind back into the edit file
+        #[arg(long)]
+        accept_relink: bool,
     },
+}
+
+fn parse_size(s: &str) -> Result<(u32, u32), String> {
+    let (w, h) = s
+        .split_once(['x', 'X'])
+        .ok_or_else(|| format!("{s:?} is not WxH"))?;
+    match (w.parse(), h.parse()) {
+        (Ok(w), Ok(h)) if w > 0 && h > 0 => Ok((w, h)),
+        _ => Err(format!("{s:?} is not WxH")),
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -56,6 +76,21 @@ fn main() -> anyhow::Result<()> {
             },
         ),
         Some(Command::Search { query }) => search::run(&query, &cli.corpus),
-        Some(Command::Render { .. }) => bail!("not implemented yet (milestone: render)"),
+        Some(Command::Render {
+            edit,
+            output,
+            size,
+            fps,
+            accept_relink,
+        }) => render::run(
+            &edit,
+            &output,
+            &render::Options {
+                corpus_db: cli.corpus,
+                size,
+                fps,
+                accept_relink,
+            },
+        ),
     }
 }

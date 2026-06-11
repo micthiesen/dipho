@@ -469,6 +469,7 @@ dependencies = [
  "crossterm",
  "dipho-core",
  "futures-util",
+ "libc",
  "ratatui",
  "serde",
  "serde_json",

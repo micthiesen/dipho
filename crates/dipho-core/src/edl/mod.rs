@@ -8,6 +8,7 @@
 
 mod compile;
 mod rebind;
+mod render;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -20,6 +21,9 @@ pub use compile::{
     JOIN_ELISION_EPS, MpvEdl, PlannedSegment, PreviewPlan, compile_mpv_edl, plan_preview,
 };
 pub use rebind::{CorpusSource, REBIND_DURATION_TOLERANCE, Rebind, RebindError, rebind};
+pub use render::{
+    AUDIO_RATE, FfmpegPlan, OutputProfile, RenderSpec, VideoProps, compile_ffmpeg, select_profile,
+};
 
 /// A transform applied to a clip. See the transform-semantics table in
 /// DESIGN.md: Loop/Stutter preview natively in mpv EDL; Reverse/Pitch/Speed
@@ -146,20 +150,20 @@ pub enum EdlCompileError {
     InvalidSpan { clip_index: usize, reason: String },
     #[error("clip {clip_index}: invalid transform: {reason}")]
     InvalidTransform { clip_index: usize, reason: String },
-}
-
-/// An ordered list of complete ffmpeg invocations (argv each) implementing
-/// the two-stage render: per-clip frame-exact extraction to uniform
-/// intermediates, then concat into the final encode.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FfmpegPlan {
-    pub invocations: Vec<Vec<String>>,
-}
-
-/// Compile an edit to the two-stage ffmpeg render plan, including the
-/// audio-master frame-quantization planning pass. Milestone: render.
-pub fn compile_ffmpeg(_edl: &Edl, _sources: &SourceMap) -> Result<FfmpegPlan, EdlCompileError> {
-    todo!("compile to ffmpeg plan (milestone: render)")
+    #[error(
+        "clip {clip_index}: transform {transform} is render-only and not implemented yet (post-MVP)"
+    )]
+    TransformUnsupported {
+        clip_index: usize,
+        transform: &'static str,
+    },
+    #[error(
+        "clip {clip_index}: source {source_id:?} has no video frame rate — frame quantization needs fps"
+    )]
+    MissingFps {
+        clip_index: usize,
+        source_id: SourceId,
+    },
 }
 
 #[cfg(test)]

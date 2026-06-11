@@ -199,8 +199,8 @@ fn segment_entry(segment: &PlannedSegment) -> String {
 }
 
 /// Explicit, locale-free float formatting: fixed six decimals, never
-/// scientific notation.
-fn fmt_time(t: f64) -> String {
+/// scientific notation. Shared with the ffmpeg render target.
+pub(super) fn fmt_time(t: f64) -> String {
     // Normalize negative zero so formatting is a pure function of value.
     format!("{:.6}", if t == 0.0 { 0.0 } else { t })
 }

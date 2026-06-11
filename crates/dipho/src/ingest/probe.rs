@@ -108,6 +108,25 @@ fn nearest_standard_fps(avg_frame_rate: &str) -> Option<(u32, u32)> {
     })
 }
 
+/// Width/height of the first real video stream (attached pictures don't
+/// count), or None for audio-only files. Masters are square-pixel by
+/// construction, so this is the display size.
+pub fn video_dimensions(path: &Path) -> Result<Option<(u32, u32)>> {
+    let doc = ffprobe_json(path, &["-show_streams"])?;
+    let streams = doc["streams"]
+        .as_array()
+        .context("ffprobe: no streams array")?;
+    for s in streams {
+        if s["codec_type"].as_str() == Some("video")
+            && s["disposition"]["attached_pic"].as_i64().unwrap_or(0) == 0
+            && let (Some(w), Some(h)) = (s["width"].as_u64(), s["height"].as_u64())
+        {
+            return Ok(Some((w as u32, h as u32)));
+        }
+    }
+    Ok(None)
+}
+
 /// Largest |start_time| across the master's streams, in seconds.
 pub fn max_start_offset(path: &Path) -> Result<f64> {
     let doc = ffprobe_json(path, &["-show_streams"])?;

@@ -17,6 +17,7 @@ cargo run -p dipho              # Run the TUI (search + audition + EDL editing/p
                                 #   --edit overrides ./edit.json)
 cargo run -p dipho -- ingest <url|file>   # Build the corpus (--corpus overrides ./.dipho/corpus.db)
 cargo run -p dipho -- search "twenty five"  # Word/phrase search, exact word spans
+cargo run -p dipho -- render edit.json out.mp4  # Two-stage ffmpeg render (--size/--fps override)
 
 # Python ingest sidecar (batch only, never in the interactive loop)
 cd python && uv sync            # Install sidecar deps
@@ -41,13 +42,15 @@ crates/
 │       ├── corpus/      # SQLite index (rusqlite bundled): schema, loader, FTS5
 │       │                #   search + query normalization (num2words port)
 │       ├── edl/         # EDL-as-data: types, validation + shared elision pre-pass
-│       │                #   (plan_preview), mpv EDL compiler, rebind precedence
+│       │                #   (plan_preview), mpv EDL + ffmpeg render compilers,
+│       │                #   rebind precedence
 │       └── dsp.rs       # Cut refinement (zero-crossing snap, spectral flux) — stub
 ├── dipho/               # Binary: clap CLI + ratatui TUI shell
 │   └── src/
 │       ├── main.rs      # CLI entry (clap subcommands, global --corpus)
 │       ├── ingest/      # Staged ingest driver: origin/idempotency, master+wav, sidecar
 │       ├── search.rs    # `dipho search` CLI
+│       ├── render.rs    # `dipho render` CLI: profile resolution, plan execution
 │       ├── tui/         # Elm-style event loop: app, event, db (reader thread),
 │       │                #   edit (EDL session: undo/autosave/save), player
 │       │                #   (mpv audition + preview actor), ui
