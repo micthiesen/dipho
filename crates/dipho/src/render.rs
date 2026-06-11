@@ -47,6 +47,9 @@ pub fn run(edit: &Path, output: &Path, opts: &Options) -> Result<()> {
     }
     if !bound.warnings.is_empty() {
         if opts.accept_relink {
+            // Persisted before the render runs, deliberately: the rebind
+            // reflects what's in the corpus and stays valid however the
+            // render itself ends.
             let json = bound.edl.to_json()?;
             let tmp = edit.with_extension("json.tmp");
             fs::write(&tmp, &json)?;
@@ -113,7 +116,15 @@ fn resolve_profile(bound: &Rebind, opts: &Options) -> Result<OutputProfile> {
 fn intermediates_dir(corpus_db: &Path, edl: &Edl, profile: &OutputProfile) -> Result<PathBuf> {
     let mut hasher = Sha256::new();
     hasher.update(edl.to_json()?.as_bytes());
-    hasher.update(format!("{profile:?}").as_bytes());
+    hasher.update(
+        format!(
+            "{}x{}@{}",
+            profile.width,
+            profile.height,
+            profile.fps.to_bits()
+        )
+        .as_bytes(),
+    );
     let hash = hasher
         .finalize()
         .iter()
@@ -219,6 +230,16 @@ mod tests {
     /// Build a source with a beep at `BEEP_AT` and run the real normalize
     /// stage on it; returns the master and its ffprobed duration.
     fn master_with_beep(dir: &Path, name: &str, size: &str, rate: u32) -> (PathBuf, f64) {
+        master_with_beep_at_fps(dir, name, size, rate, 30)
+    }
+
+    fn master_with_beep_at_fps(
+        dir: &Path,
+        name: &str,
+        size: &str,
+        rate: u32,
+        fps: u32,
+    ) -> (PathBuf, f64) {
         let beep = dir.join(format!("{name}-beep.wav"));
         ffmpeg(&[
             "-f",
@@ -236,7 +257,7 @@ mod tests {
             "-f",
             "lavfi",
             "-i",
-            &format!("testsrc2=duration=6:rate=30:size={size}"),
+            &format!("testsrc2=duration=6:rate={fps}:size={size}"),
             "-i",
             beep.to_str().unwrap(),
             "-map",
@@ -592,5 +613,42 @@ mod tests {
         assert_eq!(onsets.len(), 2, "onsets {onsets:?}");
         assert!((onsets[0] - 0.5).abs() < 0.020, "{onsets:?}");
         assert!((onsets[1] - 1.5).abs() < 0.020, "{onsets:?}");
+    }
+
+    #[test]
+    #[ignore = "spawns ffmpeg (M6 render integration test)"]
+    fn fps_mismatched_source_resamples_to_the_exact_frame_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let (master, duration) = master_with_beep_at_fps(dir.path(), "slow", "320x180", 44_100, 24);
+        let (edl, mut map) = edl_for(
+            vec![clip(1, 1.5, 2.5), clip(1, 0.5, 1.1)],
+            &[(1, &master, duration)],
+        );
+        map.get_mut(&SourceId(1)).unwrap().fps = Some(24.0);
+
+        // Profile at 30 fps against the 24 fps master: every segment goes
+        // through the fps-resampling chain and must still hit the
+        // cumulative budget exactly — n_0 = 30, n_1 = round(1.6·30) − 30.
+        let spec = RenderSpec {
+            profile: OutputProfile {
+                width: 320,
+                height: 180,
+                fps: FPS,
+            },
+            intermediates_dir: dir.path().join("work"),
+            output: dir.path().join("out.mp4"),
+        };
+        let plan = compile_ffmpeg(&edl, &map, &spec).unwrap();
+        fs::create_dir_all(&spec.intermediates_dir).unwrap();
+        for (k, (argv, expected)) in plan.stage1.iter().zip([30, 18]).enumerate() {
+            run_ffmpeg(argv).unwrap();
+            assert_eq!(video_frames(&plan.intermediates[k]), expected, "clip {k}");
+        }
+        fs::write(&plan.concat_list_path, &plan.concat_list).unwrap();
+        run_ffmpeg(&plan.stage2).unwrap();
+        assert_eq!(video_frames(&spec.output), 48);
+        let onsets = beep_onsets(&spec.output, dir.path());
+        assert_eq!(onsets.len(), 1, "onsets {onsets:?}");
+        assert!((onsets[0] - 0.5).abs() < 0.020, "{onsets:?}");
     }
 }

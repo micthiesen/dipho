@@ -207,6 +207,8 @@ fn stage1_invocation(
         w = profile.width,
         h = profile.height
     ));
+    // s32 because libavfilter has no packed 24-bit sample format; the
+    // pcm_s24le encoder narrows it losslessly for our 16/24-bit sources.
     let audio_chain = format!(
         "[1:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS,\
          aresample={AUDIO_RATE},aformat=sample_fmts=s32:channel_layouts=stereo[a]",
